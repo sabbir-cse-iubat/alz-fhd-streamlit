@@ -289,7 +289,7 @@ save_placeholder = st.sidebar.empty()
 # ---------------------------------------------------------------------
 # 7. MAIN AREA HEADER
 # ---------------------------------------------------------------------
-st.title("FHD-HybridNet Alzheimer MRI Classification")
+st.title("FHD-HybridNet Alzheimer MRI Detection")
 st.markdown(
     """
 This app uses three CNN backbones (**DenseNet121, MobileNetV1, ResNet50V2**)  
