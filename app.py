@@ -1,148 +1,141 @@
 import os
 import io
+import warnings
+
 import numpy as np
-from PIL import Image
-import streamlit as st
 import tensorflow as tf
+from PIL import Image
 import matplotlib.pyplot as plt
-import gdown
+import cv2
 
-from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
+import streamlit as st
 
-# ---------------------------------------------------------------------
-# 0. BASIC SETUP
-# ---------------------------------------------------------------------
+warnings.filterwarnings("ignore", category=UserWarning, module="keras")
+
+# ---------------------------------------------------------
+# Config
+# ---------------------------------------------------------
+
 st.set_page_config(
-    page_title="FHD-HybridNet Alzheimer MRI Demo",
+    page_title="FHD-HybridNet Alzheimer MRI Classifier",
     layout="wide"
 )
 
-SAMPLE_DIR = "sample_images"
-os.makedirs(SAMPLE_DIR, exist_ok=True)
+CLASS_NAMES = [
+    "MildDemented",
+    "ModerateDemented",
+    "NonDemented",
+    "VeryMildDemented",
+]
 
 IMG_SIZE = (224, 224)
+MODEL_DIR = "alz_fhd_models"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
-
-# Local folder where we will store downloaded models
-MODEL_CACHE_DIR = "models_cache"
-os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-
-# ---------------------------------------------------------------------
-# 1. GOOGLE DRIVE MODEL LINKS (YOUR LINKS -> IDs)
-# ---------------------------------------------------------------------
-# densenet : https://drive.google.com/file/d/1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO/view?usp=drive_link
-# mobilenet: https://drive.google.com/file/d/1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0/view?usp=drive_link
-# resnet   : https://drive.google.com/file/d/1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW/view?usp=drive_link
-
-DENSENET_ID  = "1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO"
-MOBILENET_ID = "1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0"
-RESNET_ID    = "1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW"
+# Google Drive links (your links)
+DENSENET_URL = (
+    "https://drive.google.com/uc?export=download&id=1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO"
+)
+MOBILENET_URL = (
+    "https://drive.google.com/uc?export=download&id=1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0"
+)
+RESNET_URL = (
+    "https://drive.google.com/uc?export=download&id=1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW"
+)
 
 
-def gdrive_direct_url(file_id: str) -> str:
-    """Direct download URL for gdown."""
-    return f"https://drive.google.com/uc?id={file_id}"
+def get_url_and_fname(backbone: str):
+    """Return (url, local_filename) for each backbone."""
+    if backbone == "DenseNet121":
+        return DENSENET_URL, os.path.join(MODEL_DIR, "densenet_alz_fhd.keras")
+    if backbone == "MobileNetV1":
+        return MOBILENET_URL, os.path.join(MODEL_DIR, "mobilenet_alz_fhd.keras")
+    if backbone == "ResNet50V2":
+        return RESNET_URL, os.path.join(MODEL_DIR, "resnet_alz_fhd.keras")
+    raise ValueError(f"Unknown backbone: {backbone}")
 
 
-# ---------------------------------------------------------------------
-# 2. MODEL LOADING VIA GDOWN (NO .keras/datasets PATH)
-# ---------------------------------------------------------------------
-def _download_model_if_needed(file_id: str, filename: str) -> str:
-    """
-    Use gdown to download from Google Drive into MODEL_CACHE_DIR.
-    Returns the local file path.
-    """
-    local_path = os.path.join(MODEL_CACHE_DIR, filename)
-
-    if not os.path.exists(local_path):
-        url = gdrive_direct_url(file_id)
-        st.info(f"📥 Downloading model: {filename} (first time only)")
-        try:
-            gdown.download(url, local_path, quiet=False)
-        except Exception as e:
-            st.error(f"Failed to download {filename} from Google Drive.\nError: {e}")
-            raise
-
-    if not os.path.exists(local_path):
-        # Download failed or file not created
-        st.error(f"Model file {filename} was not created. Check Drive sharing / ID.")
-        raise FileNotFoundError(local_path)
-
-    return local_path
+# ---------------------------------------------------------
+# Model loading (cached)
+# ---------------------------------------------------------
 
 
 @st.cache_resource(show_spinner=False)
-def load_single_model(model_name: str):
+def load_single_model(backbone_name: str):
     """
-    Download (first time) + load the requested model using gdown.
-    model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
+    Download (if needed) and load a single keras model for the given backbone.
     """
-    if model_name == "DenseNet121":
-        file_id = DENSENET_ID
-        fname = "densenet_alz_fhd.keras"
-    elif model_name == "MobileNetV1":
-        file_id = MOBILENET_ID
-        fname = "mobilenet_alz_fhd.keras"
-    elif model_name == "ResNet50V2":
-        file_id = RESNET_ID
-        fname = "resnet_alz_fhd.keras"
-    else:
-        raise ValueError(f"Unknown model_name: {model_name}")
+    url, local_path = get_url_and_fname(backbone_name)
 
-    local_path = _download_model_if_needed(file_id, fname)
-
-    try:
-        model = tf.keras.models.load_model(local_path, compile=False)
-    except Exception as e:
-        st.error(
-            f"Failed to load model from {local_path}.\n"
-            f"This usually means the file is not a valid Keras model.\n\nError: {e}"
-        )
-        raise
-
+    # Download only if file not present
+    if not os.path.exists(local_path):
+        with st.spinner(f"Downloading {backbone_name} weights… (first time only)"):
+            tf.keras.utils.get_file(
+                fname=os.path.basename(local_path),
+                origin=url,
+                cache_dir=".",
+                cache_subdir=MODEL_DIR,
+            )
+    model = tf.keras.models.load_model(local_path, compile=False)
     return model
 
 
 @st.cache_resource(show_spinner=False)
 def load_all_base_models():
-    """Load all three backbones once for FHD-HybridNet."""
+    """
+    Load all three base models once and reuse (for FHD-HybridNet).
+    """
     dn = load_single_model("DenseNet121")
     mb = load_single_model("MobileNetV1")
     rn = load_single_model("ResNet50V2")
-    return {"DenseNet": dn, "MobileNet": mb, "ResNet": rn}
+    return {"DenseNet121": dn, "MobileNetV1": mb, "ResNet50V2": rn}
 
 
-# ---------------------------------------------------------------------
-# 3. IMAGE HELPERS
-# ---------------------------------------------------------------------
-def load_image_from_file(file, img_size=IMG_SIZE):
-    """Load PIL image from uploaded file or path and resize."""
-    if isinstance(file, str):
-        img = Image.open(file).convert("RGB")
+# ---------------------------------------------------------
+# Image utilities
+# ---------------------------------------------------------
+
+
+def load_image_to_array(file_obj_or_path, target_size=IMG_SIZE):
+    """
+    Load image from either a file-like or a filesystem path,
+    return (PIL_image, np_array_batch).
+    """
+    if hasattr(file_obj_or_path, "read"):
+        img = Image.open(file_obj_or_path).convert("RGB")
     else:
-        img = Image.open(file).convert("RGB")
-    img_resized = img.resize(img_size)
-    arr = np.asarray(img_resized).astype("float32") / 255.0
-    batch = np.expand_dims(arr, axis=0)
-    return img, batch
+        img = Image.open(str(file_obj_or_path)).convert("RGB")
+
+    img = img.resize(target_size)
+    arr = np.asarray(img).astype("float32") / 255.0
+    arr = np.expand_dims(arr, axis=0)  # (1, H, W, 3)
+    return img, arr
 
 
-# ---------------------------------------------------------------------
-# 4. GRAD-CAM HELPERS
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# Grad-CAM
+# ---------------------------------------------------------
+
+
+from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
+
+
 def get_last_conv_layer_name(model):
-    """Try to find a suitable last convolution layer for Grad-CAM."""
+    """
+    Try to find the last 4D conv-like layer.
+    """
     conv_types = (Conv2D, DepthwiseConv2D, SeparableConv2D)
 
     for layer in reversed(model.layers):
         if isinstance(layer, conv_types):
             return layer.name
+        # Nested models / Sequential inside Functional
         if hasattr(layer, "layers"):
             for sub in reversed(layer.layers):
                 if isinstance(sub, conv_types):
                     return sub.name
 
+    # fallback: check by output_shape
     for layer in reversed(model.layers):
         try:
             out_shape = layer.output_shape
@@ -159,20 +152,18 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
     last_conv_layer = model.get_layer(last_conv_name)
 
     grad_model = tf.keras.models.Model(
-        [model.inputs],
-        [last_conv_layer.output, model.output]
+        [model.inputs], [last_conv_layer.output, model.output]
     )
 
     with tf.GradientTape() as tape:
         conv_outputs, preds = grad_model(img_array)
 
-        # Handle models that return lists (multi-output)
+        # Some models return lists of tensors
         if isinstance(conv_outputs, (list, tuple)):
             conv_outputs = conv_outputs[0]
         if isinstance(preds, (list, tuple)):
             preds = preds[0]
 
-        # preds shape: (1, num_classes)
         if class_index is None:
             class_index = tf.argmax(preds[0])
 
@@ -182,55 +173,58 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
     conv_outputs = conv_outputs[0]  # (H, W, C)
-
     heatmap = tf.reduce_sum(pooled_grads * conv_outputs, axis=-1)
     heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy()
 
 
-
-def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
-    import cv2
-
-    img = np.array(pil_image).astype("float32") / 255.0
-    h, w = img.shape[:2]
-
+def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.45):
+    img = pil_image
+    w, h = img.size
     heatmap_resized = cv2.resize(heatmap, (w, h))
     heatmap_resized = np.uint8(255 * heatmap_resized)
-
     heatmap_color = cv2.applyColorMap(heatmap_resized, cv2.COLORMAP_JET)
     heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
-    heatmap_color = heatmap_color.astype("float32") / 255.0
 
-    overlay = alpha * heatmap_color + (1 - alpha) * img
+    base = np.asarray(img).astype("float32") / 255.0
+    overlay = alpha * (heatmap_color.astype("float32") / 255.0) + (1 - alpha) * base
     overlay = np.clip(overlay, 0.0, 1.0)
     return overlay
 
 
-# ---------------------------------------------------------------------
-# 5. FHD ENSEMBLE HELPERS
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------
+# Fuzzy Hellinger Distance ensemble
+# ---------------------------------------------------------
+
+
 def fuzzy_hellinger_distance(p1, p2):
     return 0.5 * np.sum((np.sqrt(p1) - np.sqrt(p2)) ** 2)
 
 
 def ensemble_predict_fhd_single(models_dict, img_batch):
-    keys = ["DenseNet", "MobileNet", "ResNet"]
+    """
+    Run all three base models, compute FHD among their probability vectors,
+    and choose the model whose predictions are most in consensus.
+    Returns:
+      probs      : np.array (num_classes,)
+      pred_idx   : int
+      chosen_key : str (one of the backbone names)
+    """
+    keys = ["DenseNet121", "MobileNetV1", "ResNet50V2"]
     preds_list = []
 
     for k in keys:
-        preds = models_dict[k].predict(img_batch, verbose=0)[0]
-        preds_list.append(preds)
+        preds_list.append(models_dict[k].predict(img_batch, verbose=0)[0])
 
     m_count = len(preds_list)
     avg_fhd = []
 
-    for m1 in range(m_count):
+    for i in range(m_count):
         dists = []
-        for m2 in range(m_count):
-            if m1 == m2:
+        for j in range(m_count):
+            if i == j:
                 continue
-            dists.append(fuzzy_hellinger_distance(preds_list[m1], preds_list[m2]))
+            dists.append(fuzzy_hellinger_distance(preds_list[i], preds_list[j]))
         avg_fhd.append(np.mean(dists))
 
     best_idx = int(np.argmin(avg_fhd))
@@ -247,149 +241,180 @@ def run_fhd_ensemble(img_batch):
     return probs, pred_idx, chosen_key, grad_model
 
 
-# ---------------------------------------------------------------------
-# 6. SIDEBAR CONTROLS
-# ---------------------------------------------------------------------
-st.sidebar.title("Controls")
+# ---------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------
+
+# ---- Header text ----
+st.title("FHD-HybridNet Alzheimer MRI Classifier")
+
+st.write(
+    "This app uses three CNN backbones (**DenseNet121**, **MobileNetV1**, "
+    "**ResNet50V2**) and a fuzzy-logic-based ensemble (**Fuzzy Hellinger "
+    "Distance**) to classify Alzheimer MRI scans into four classes."
+)
+
+# Instruction box (your requested line)
+st.info("Select a model & image, then click **Run prediction**.")
+
+st.markdown("---")
+
+# ---- Sidebar controls ----
+st.sidebar.header("Controls")
 
 model_name = st.sidebar.selectbox(
     "Select model",
-    ["DenseNet121", "MobileNetV1", "ResNet50V2", "FHD-HybridNet"],
-    index=3
+    ["FHD-HybridNet", "DenseNet121", "MobileNetV1", "ResNet50V2"],
+    index=0,
 )
 
-source = st.sidebar.radio(
+image_mode = st.sidebar.radio(
     "Choose image source",
     ["Upload MRI", "Sample gallery"],
-    index=1
+    index=1,
 )
 
-chosen_file = None
+uploaded_file = None
+sample_file_name = None
+sample_path_for_display = None
 
-if source == "Upload MRI":
-    uploaded = st.sidebar.file_uploader(
-        "Upload a brain MRI image",
-        type=["png", "jpg", "jpeg"]
+SAMPLE_DIR = "sample_images"
+
+if image_mode == "Upload MRI":
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload an MRI image",
+        type=["png", "jpg", "jpeg"],
     )
-    if uploaded is not None:
-        chosen_file = uploaded
 else:
-    try:
-        files = sorted(
-            [f for f in os.listdir(SAMPLE_DIR)
-             if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+    # Sample gallery from repo folder
+    sample_files = []
+    if os.path.isdir(SAMPLE_DIR):
+        for f in sorted(os.listdir(SAMPLE_DIR)):
+            if f.lower().endswith((".png", ".jpg", ".jpeg")):
+                sample_files.append(f)
+
+    if not sample_files:
+        st.sidebar.warning(
+            "No sample images found in `sample_images/` folder in the repo."
         )
-    except FileNotFoundError:
-        files = []
-
-    if files:
-        sample_name = st.sidebar.selectbox("Pick a sample image", files)
-        chosen_file = os.path.join(SAMPLE_DIR, sample_name)
     else:
-        st.sidebar.warning("No images found in sample_images/")
+        sample_file_name = st.sidebar.selectbox(
+            "Pick a sample image", sample_files, index=0
+        )
+        sample_path_for_display = f"{SAMPLE_DIR}/{sample_file_name}"
 
-run_button = st.sidebar.button("▶ Run prediction")
-save_placeholder = st.sidebar.empty()
+# Run button on main page (not sidebar, as you requested a clear action)
+run_prediction = st.button("Run prediction", type="primary")
 
-# ---------------------------------------------------------------------
-# 7. MAIN AREA HEADER
-# ---------------------------------------------------------------------
-st.title("FHD-HybridNet Alzheimer MRI Classification Demo")
-st.markdown(
-    """
-This app uses three CNN backbones (**DenseNet121, MobileNetV1, ResNet50V2**)  
-and a fuzzy-logic-based ensemble (**Fuzzy Hellinger Distance**)  
-to classify Alzheimer MRI scans into **four classes**.
-"""
-)
+# Placeholder for final figure for download
+combined_fig = None
 
-col_info, col_out = st.columns([1, 2])
+# ---------------------------------------------------------
+# Selected options box (just after description and before results)
+# ---------------------------------------------------------
 
-with col_info:
-    st.subheader("Selected options")
-    st.write(f"**Model:** {model_name}")
-    st.write(f"**Source:** {source}")
-    if isinstance(chosen_file, str):
-        st.write(f"**Image path:** `{chosen_file}`")
-    elif chosen_file is None:
-        st.write("_No image selected yet._")
+def get_display_image_path():
+    if image_mode == "Upload MRI":
+        if uploaded_file is not None:
+            return uploaded_file.name
+        return "(no file uploaded)"
     else:
-        st.write(f"**Uploaded file:** `{chosen_file.name}`")
+        if sample_path_for_display is not None:
+            return sample_path_for_display
+        return "(no sample selected)"
 
-if not run_button:
-    with col_out:
-        st.info("👈 Select a model & image, then click **Run prediction**.")
-    st.stop()
 
-if chosen_file is None:
-    st.error("Please upload or select an image first.")
-    st.stop()
+st.subheader("Selected options")
+st.write(f"**Model:** {model_name}")
+st.write(f"**Source:** {image_mode}")
+st.write(f"**Image path:** {get_display_image_path()}")
 
-# ---------------------------------------------------------------------
-# 8. LOAD IMAGE & RUN MODEL
-# ---------------------------------------------------------------------
-orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
+st.markdown("---")
 
-with st.spinner("Running prediction…"):
-    if model_name == "FHD-HybridNet":
-        probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
-        cam_title = f"FHD-HybridNet ({chosen_key})"
+# ---------------------------------------------------------
+# Core prediction logic (triggered by button)
+# ---------------------------------------------------------
+
+if run_prediction:
+    if image_mode == "Upload MRI" and uploaded_file is None:
+        st.error("Please upload an MRI image first.")
+    elif image_mode == "Sample gallery" and sample_file_name is None:
+        st.error("No sample image available / selected.")
     else:
-        model = load_single_model(model_name)
-        preds = model.predict(batch, verbose=0)[0]
-        probs = preds
-        pred_idx = int(np.argmax(probs))
-        grad_model = model
-        cam_title = model_name
+        # 1. Load image
+        if image_mode == "Upload MRI":
+            img_pil, batch = load_image_to_array(uploaded_file, IMG_SIZE)
+        else:
+            img_path = os.path.join(SAMPLE_DIR, sample_file_name)
+            img_pil, batch = load_image_to_array(img_path, IMG_SIZE)
 
-pred_class = CLASS_NAMES[pred_idx]
+        # 2. Run model
+        with st.spinner("Running prediction…"):
+            if model_name == "FHD-HybridNet":
+                probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
+                cam_title = f"FHD-HybridNet ({chosen_key})"
+            else:
+                model = load_single_model(model_name)
+                preds = model.predict(batch, verbose=0)[0]
+                probs = preds
+                pred_idx = int(np.argmax(preds))
+                grad_model = model
+                cam_title = model_name
 
-with st.spinner("Computing Grad-CAM…"):
-    heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
-    overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
+        pred_class = CLASS_NAMES[pred_idx]
 
-# ---------------------------------------------------------------------
-# 9. VISUAL OUTPUT + SAVE BUTTON
-# ---------------------------------------------------------------------
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+        # 3. Grad-CAM
+        with st.spinner("Computing Grad-CAM…"):
+            heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
+            overlay = overlay_heatmap_on_image(heatmap, img_pil, alpha=0.45)
 
-axes[0].imshow(orig_img)
-axes[0].set_title(f"Original\nPredicted: {pred_class}")
-axes[0].axis("off")
+        # 4. Plot results
+        fig = plt.figure(figsize=(14, 5))
 
-axes[1].imshow(overlay)
-axes[1].set_title(f"Grad-CAM\n{cam_title}")
-axes[1].axis("off")
+        # Original
+        ax1 = plt.subplot(1, 3, 1)
+        ax1.imshow(img_pil)
+        ax1.set_title("Original Image")
+        ax1.axis("off")
 
-axes[2].barh(CLASS_NAMES, probs)
-axes[2].set_xlim(0, 1)
-axes[2].set_xlabel("Probability")
-axes[2].set_title("Class probabilities")
-for i, cls in enumerate(CLASS_NAMES):
-    axes[2].text(
-        probs[i] + 0.01,
-        i,
-        f"{probs[i]:.3f}",
-        va="center"
-    )
+        # Grad-CAM
+        ax2 = plt.subplot(1, 3, 2)
+        ax2.imshow(overlay)
+        ax2.set_title(f"Grad-CAM\n{cam_title}")
+        ax2.axis("off")
 
-plt.tight_layout()
+        # Probabilities
+        ax3 = plt.subplot(1, 3, 3)
+        y_pos = np.arange(len(CLASS_NAMES))
+        bars = ax3.barh(y_pos, probs, align="center")
+        ax3.set_yticks(y_pos)
+        ax3.set_yticklabels(CLASS_NAMES)
+        ax3.set_xlim(0, 1.0)
+        ax3.set_xlabel("Probability")
+        ax3.set_title("Class probabilities")
+        for i, bar in enumerate(bars):
+            ax3.text(
+                probs[i] + 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{probs[i]:.3f}",
+                va="center",
+            )
 
-with col_out:
-    st.pyplot(fig)
+        plt.tight_layout()
 
-    st.markdown(f"### Predicted class: **{pred_class}**")
-    st.markdown("#### Probabilities")
-    for i, cls in enumerate(CLASS_NAMES):
-        st.write(f"- **{cls:16s}**: {probs[i]:.4f}")
+        st.pyplot(fig)
+        st.markdown(f"### Predicted Class: **{pred_class}**")
 
-buf = io.BytesIO()
-fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
-buf.seek(0)
+        # Save figure to buffer for download
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        buf.seek(0)
+        combined_fig = buf
 
-save_placeholder.download_button(
-    "💾 Save result image",
-    data=buf,
-    file_name=f"result_{pred_class}.png",
-    mime="image/png"
-)
+        # Download button
+        st.download_button(
+            label="Download result image",
+            data=combined_fig,
+            file_name=f"alz_fhd_prediction_{pred_class}.png",
+            mime="image/png",
+        )
