@@ -22,10 +22,18 @@ CLASS_NAMES = [
 
 SAMPLE_DIR = "sample_images"
 
-# === TODO: এখানকার তিনটা URL তোমার নিজের model (.keras) ফাইলের direct link দিও ===
-DENSENET_URL = "https://drive.google.com/file/d/1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO/view?usp=drive_link"
-MOBILENET_URL = "https://drive.google.com/file/d/1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0/view?usp=drive_link"
-RESNET_URL = "https://drive.google.com/file/d/1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW/view?usp=drive_link"
+# -------------------------------------------------------------------
+# 🔐 Google Drive file IDs for the three models
+#    👉 Replace these with your real IDs
+# -------------------------------------------------------------------
+DENSENET_ID  = "1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO"
+MOBILENET_ID = "1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0"
+RESNET_ID    = "1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW"
+
+
+def gdrive_url(file_id: str) -> str:
+    """Build a direct-download URL from a Google Drive file ID."""
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
 
 
 # -------------------------------------------------------------------
@@ -38,13 +46,13 @@ def load_single_model(backbone_name: str):
     backbone_name in {"DenseNet121", "MobileNetV1", "ResNet50V2"}.
     """
     if backbone_name == "DenseNet121":
-        url = DENSENET_URL
+        url = gdrive_url(DENSENET_ID)
         fname = "densenet_alz_fhd.keras"
     elif backbone_name == "MobileNetV1":
-        url = MOBILENET_URL
+        url = gdrive_url(MOBILENET_ID)
         fname = "mobilenet_alz_fhd.keras"
     elif backbone_name == "ResNet50V2":
-        url = RESNET_URL
+        url = gdrive_url(RESNET_ID)
         fname = "resnet_alz_fhd.keras"
     else:
         raise ValueError(f"Unknown backbone: {backbone_name}")
@@ -205,7 +213,6 @@ def ensemble_predict_fhd_single(models_dict: dict, img_batch: np.ndarray):
     return pred_idx, chosen_probs, chosen_key
 
 
-# Wrapper used by main app for ensemble
 def run_fhd_ensemble(img_batch: np.ndarray):
     """
     Returns:
@@ -281,7 +288,6 @@ else:
         st.sidebar.info("No sample images found in the folder.")
 
 run_button = st.sidebar.button("🔍 Predict")
-
 
 # ---------------- Main prediction logic ----------------
 if run_button:
