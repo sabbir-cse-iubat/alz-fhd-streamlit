@@ -375,15 +375,16 @@ st.pyplot(fig)
 st.markdown(f"#### Final Prediction : *{pred_class}*")
 
 # ---------------------------------------------------------------------
-# 10. Save generated image
+# 10. Save generated image (placed right after final prediction text)
 # ---------------------------------------------------------------------
 buf = io.BytesIO()
 fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
 buf.seek(0)
 
-save_placeholder.download_button(
+st.download_button(
     "💾 Save result image",
     data=buf,
     file_name=f"result_{pred_class}.png",
     mime="image/png"
 )
+
