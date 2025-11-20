@@ -298,7 +298,7 @@ to classify Alzheimer MRI scans into **four classes**.
 """
 )
 
-col_info, col_out = st.columns([1, 3])
+col_info, col_out = st.columns([1, 1])
 
 with col_info:
     # NEW: helper text always at top of this block
