@@ -13,7 +13,7 @@ from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
 # 0. BASIC SETUP
 # ---------------------------------------------------------------------
 st.set_page_config(
-    page_title="FHD-HybridNet Alzheimer MRI Demo",
+    page_title="FHD-HybridNet Alzheimer MRI",
     layout="wide"
 )
 
@@ -379,8 +379,7 @@ st.pyplot(fig)
 
 # ► Show Predicted Class only
 st.markdown(f"""
-### 🧠 Final Prediction  
-**{pred_class}**
+## Final Prediction : **{pred_class}**
 """)
 
 # ---------------------------------------------------------------------
