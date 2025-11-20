@@ -165,17 +165,28 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
 
     with tf.GradientTape() as tape:
         conv_outputs, preds = grad_model(img_array)
+
+        # Handle models that return lists (multi-output)
+        if isinstance(conv_outputs, (list, tuple)):
+            conv_outputs = conv_outputs[0]
+        if isinstance(preds, (list, tuple)):
+            preds = preds[0]
+
+        # preds shape: (1, num_classes)
         if class_index is None:
             class_index = tf.argmax(preds[0])
+
         class_channel = preds[:, class_index]
 
     grads = tape.gradient(class_channel, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_outputs = conv_outputs[0]
+
+    conv_outputs = conv_outputs[0]  # (H, W, C)
 
     heatmap = tf.reduce_sum(pooled_grads * conv_outputs, axis=-1)
     heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy()
+
 
 
 def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
