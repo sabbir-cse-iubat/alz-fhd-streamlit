@@ -504,6 +504,118 @@ if not run_button:
 if chosen_file is None:
     st.error("Please upload or select an image first.")
     st.stop()
+# ===== WHITE THEME CSS =====
+st.markdown("""
+<style>
+
+    /* GLOBAL BACKGROUND */
+    .stApp {
+        background: #fafafa !important;
+        color: #1f2937;
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* CONTAINER WIDTH */
+    .block-container {
+        padding-top: 1.5rem;
+        max-width: 1180px;
+    }
+
+    /* GENERAL TITLES */
+    h1, h2, h3, h4 {
+        color: #1e293b !important;
+        font-weight: 700;
+    }
+
+    /* SIDEBAR */
+    section[data-testid="stSidebar"] {
+        background: #ffffff !important;
+        border-right: 1px solid #e5e7eb;
+    }
+
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #1e293b !important;
+    }
+
+    section[data-testid="stSidebar"] label {
+        font-weight: 600;
+        color: #334155 !important;
+    }
+
+    /* CARDS */
+    .hero-card {
+        background: #ffffff;
+        border-radius: 1rem;
+        padding: 1.5rem 2rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+    }
+
+    .info-card {
+        background: #ffffff;
+        border-radius: 1rem;
+        padding: 1.2rem 1.5rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+    }
+
+    .prediction-card {
+        background: #ffffff;
+        border-radius: 1rem;
+        padding: 1.5rem 1.7rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.07);
+    }
+
+    /* CHIPS */
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        color: #475569;
+        font-size: 0.78rem;
+        margin-right: 6px;
+    }
+
+    /* BUTTONS */
+    .stButton>button {
+        background: #2563eb !important;
+        color: white !important;
+        border-radius: 8px !important;
+        padding: 0.45rem 1.2rem !important;
+        border: none !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 10px rgba(37,99,235,0.35);
+    }
+    .stButton>button:hover {
+        background: #1d4ed8 !important;
+    }
+
+    /* DOWNLOAD BUTTON */
+    .stDownloadButton>button {
+        background: #10b981 !important;
+        color: white !important;
+        border-radius: 8px !important;
+        padding: 0.45rem 1.2rem !important;
+        font-weight: 600 !important;
+        border: none !important;
+    }
+    .stDownloadButton>button:hover {
+        background: #059669 !important;
+    }
+
+    /* PLOT MARGIN */
+    .stPyplot {
+        margin-top: 0.5rem !important;
+    }
+
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------
 # 8. LOAD IMAGE & RUN MODEL (UNCHANGED)
