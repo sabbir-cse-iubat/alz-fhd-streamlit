@@ -379,7 +379,7 @@ st.pyplot(fig)
 
 # ► Show Predicted Class only
 st.markdown(f"""
-# Final Prediction : *{pred_class}*
+Final Prediction : *{pred_class}*
 """)
 
 # ---------------------------------------------------------------------
