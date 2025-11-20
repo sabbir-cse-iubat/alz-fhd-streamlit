@@ -68,10 +68,7 @@ def _download_model_if_needed(file_id: str, filename: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def load_single_model(model_name: str):
-    """
-    Download (first time) + load the requested model using gdown.
-    model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
-    """
+
     if model_name == "DenseNet121":
         file_id = DENSENET_ID
         fname = "densenet_alz_fhd.keras"
