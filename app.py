@@ -54,7 +54,7 @@ def _download_model_if_needed(file_id: str, filename: str) -> str:
         url = gdrive_direct_url(file_id)
 
         try:
-            gdown.download(url, local_path, quiet=False)
+            gdown.download(url, local_path, quiet=True)
         except Exception as e:
             st.error(f"Failed to download {filename} from Google Drive.\nError: {e}")
             raise
