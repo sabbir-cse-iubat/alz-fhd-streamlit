@@ -129,16 +129,24 @@ def ensemble_predict_fhd(img_batch):
 
 def get_last_conv_layer_name(model):
     """
-    Detect last conv-like layer with 4D output for Grad-CAM.
+    Return the name of the last layer whose output is 4D (batch, H, W, C).
+    Works even with Keras 3 / TF 2.20 models.
     """
+    # Walk from the end of the layer list
     for layer in reversed(model.layers):
+        # কিছু layer এর output_shape থাকে না, তাই try/except
         try:
             out_shape = layer.output_shape
         except Exception:
             continue
-        if len(out_shape) == 4:
+
+        # Conv / feature-map type layer হলে output 4-D হয়
+        if isinstance(out_shape, (tuple, list)) and len(out_shape) == 4:
             return layer.name
+
+    # যদি কিছুই না পাওয়া যায়, পরিষ্কার error দাও
     raise ValueError("No suitable conv layer found in model.")
+
 
 
 def make_gradcam_heatmap(model, img_array, class_index=None):
@@ -150,18 +158,20 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
     )
 
     with tf.GradientTape() as tape:
-        conv_outputs, preds = grad_model(img_array)
+        conv_outputs, predictions = grad_model(img_array)
         if class_index is None:
-            class_index = tf.argmax(preds[0])
-        class_channel = preds[:, class_index]
+            class_index = tf.argmax(predictions[0])
+        class_channel = predictions[:, class_index]
 
     grads = tape.gradient(class_channel, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
-    conv_outputs = conv_outputs[0]
-    heatmap = tf.reduce_sum(tf.multiply(pooled_grads, conv_outputs), axis=-1)
+    conv_outputs = conv_outputs[0]   # (H, W, C)
+    heatmap = tf.reduce_sum(pooled_grads * conv_outputs, axis=-1)
+
     heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy()
+
 
 
 def overlay_gradcam(heatmap, orig_image_np, alpha=0.4):
@@ -242,8 +252,149 @@ with st.sidebar:
             if chosen:
                 idx = sample_labels.index(chosen)
                 selected_sample_path = sample_paths[idx]
+# ------------------------------------------------------
+# Sidebar controls
+# ------------------------------------------------------
+st.sidebar.header("Controls")
+
+model_name = st.sidebar.selectbox(
+    "Select model",
+    ["DenseNet121", "MobileNetV1", "ResNet50V2", "FHD-HybridNet"],
+    index=3,
+)
+
+source = st.sidebar.radio(
+    "Choose image source",
+    ["Upload MRI", "Sample gallery"],
+    index=1,
+)
+
+selected_file = None
+uploaded_file = None
+
+if source == "Upload MRI":
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload an MRI image", type=["png", "jpg", "jpeg"]
+    )
+else:
+    # sample_images ফোল্ডার থেকে ফাইল লিস্ট
+    SAMPLE_DIR = "sample_images"
+    sample_files = sorted(
+        [f for f in os.listdir(SAMPLE_DIR)
+         if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+    )
+    selected_file = st.sidebar.selectbox(
+        "Pick a sample image", sample_files
+    )
+
+# 👉 নতুন Predict button
+run_button = st.sidebar.button("🔍 Predict")
+
 
 # ----- Main logic -----
+
+import io  # file top এ থাকলে ভাল
+
+st.title("FHD-HybridNet Alzheimer MRI Classifier")
+
+st.write(
+    "This app uses three CNN backbones (DenseNet121, MobileNetV1, ResNet50V2) "
+    "and a fuzzy-logic-based ensemble (Fuzzy Hellinger Distance) to classify "
+    "Alzheimer MRI scans into four classes."
+)
+
+# এখানে prediction চালাবো শুধু button চাপলে
+if run_button:
+    # ---------- 1. Image source resolve ----------
+    if source == "Upload MRI":
+        if uploaded_file is None:
+            st.error("Please upload an MRI image first.")
+            st.stop()
+        # uploaded file থেকে PIL image
+        img = Image.open(uploaded_file).convert("RGB")
+        img_np = np.array(img)
+        img_batch = preprocess_image_array(img_np)  # ← তোমার নিজস্ব preprocess func
+        img_path_str = uploaded_file.name
+    else:
+        if not selected_file:
+            st.error("No sample image found.")
+            st.stop()
+        img_path = os.path.join(SAMPLE_DIR, selected_file)
+        img = Image.open(img_path).convert("RGB")
+        img_np = np.array(img)
+        img_batch = preprocess_image_array(img_np)
+        img_path_str = img_path
+
+    # ---------- 2. Run model ----------
+    with st.spinner("Running prediction..."):
+        if model_name == "FHD-HybridNet":
+            probs, pred_idx, grad_model_name, grad_model = run_fhd_ensemble(img_batch)
+            title_cam = f"FHD-HybridNet ({grad_model_name})"
+        else:
+            model = load_single_model(model_name)      # তোমার cache করা loader
+            preds = model.predict(img_batch, verbose=0)[0]
+            probs = preds
+            pred_idx = int(np.argmax(preds))
+            grad_model = model
+            title_cam = model_name
+
+        pred_class = CLASS_NAMES[pred_idx]  # list of labels
+
+        # ---------- 3. Grad-CAM ----------
+        heatmap = make_gradcam_heatmap(grad_model, img_batch, class_index=pred_idx)
+        overlay = overlay_gradcam_on_image(heatmap, img)  # returns numpy / float image
+
+    # ---------- 4. Figure draw ----------
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+
+    # Original
+    axes[0].imshow(img)
+    axes[0].set_title(f"Original\n({os.path.basename(img_path_str)})")
+    axes[0].axis("off")
+
+    # Grad-CAM overlay
+    axes[1].imshow(overlay)
+    axes[1].set_title(f"Grad-CAM\n{title_cam}")
+    axes[1].axis("off")
+
+    # Probabilities bar plot
+    y_pos = np.arange(len(CLASS_NAMES))
+    axes[2].barh(y_pos, probs)
+    axes[2].set_yticks(y_pos)
+    axes[2].set_yticklabels(CLASS_NAMES)
+    axes[2].invert_yaxis()
+    axes[2].set_xlim(0, 1)
+    axes[2].set_xlabel("Probability")
+    axes[2].set_title("Class probabilities")
+
+    for i, p in enumerate(probs):
+        axes[2].text(
+            p + 0.01,
+            i,
+            f"{p:.3f}",
+            va="center",
+        )
+
+    plt.tight_layout()
+
+    # Show in app
+    st.pyplot(fig)
+
+    st.markdown(f"**Predicted class:** `{pred_class}`")
+
+    # ---------- 5. Save result button ----------
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    buf.seek(0)
+
+    st.download_button(
+        label="💾 Save result as image",
+        data=buf,
+        file_name="fhd_prediction_result.png",
+        mime="image/png",
+    )
+
+
 image_available = False
 pil_img = None
 
