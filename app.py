@@ -165,7 +165,6 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
     with tf.GradientTape() as tape:
         conv_outputs, preds = grad_model(img_array)
 
-        # If model has multiple outputs, take the first
         if isinstance(preds, (list, tuple)):
             preds = preds[0]
 
@@ -345,29 +344,53 @@ with st.spinner("Computing Grad-CAM…"):
     overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
 
 # ---------------------------------------------------------------------
-# 9. VISUAL OUTPUT + SAVE BUTTON
+# 9. VISUAL OUTPUT + SAVE BUTTON (COLAB-STYLE LAYOUT)
 # ---------------------------------------------------------------------
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+# 2 rows × 3 columns:
+# (1,1) Original image + title
+# (1,2) Grad-CAM
+# (1,3) Probabilities bar chart
+# (2,2) Big "Predicted Class" text (centered)
+fig = plt.figure(figsize=(15, 7))
 
-axes[0].imshow(orig_img)
-axes[0].set_title(f"Original\nPredicted: {pred_class}")
-axes[0].axis("off")
+# Original image
+ax1 = plt.subplot(2, 3, 1)
+ax1.imshow(orig_img)
+ax1.set_title(f"Original Image\nOriginal Class: {pred_class}")
+ax1.axis("off")
 
-axes[1].imshow(overlay)
-axes[1].set_title(f"Grad-CAM\n{cam_title}")
-axes[1].axis("off")
+# Grad-CAM overlay
+ax2 = plt.subplot(2, 3, 2)
+ax2.imshow(overlay)
+ax2.set_title(f"Predicted Image (Grad-CAM)\n{cam_title}")
+ax2.axis("off")
 
-axes[2].barh(CLASS_NAMES, probs)
-axes[2].set_xlim(0, 1)
-axes[2].set_xlabel("Probability")
-axes[2].set_title("Class probabilities")
-for i, cls in enumerate(CLASS_NAMES):
-    axes[2].text(
+# Probabilities bar chart
+ax3 = plt.subplot(2, 3, 3)
+bars = ax3.barh(CLASS_NAMES, probs)
+ax3.set_xlim(0, 1)
+ax3.set_xlabel("Probability")
+ax3.set_title("Class probabilities")
+for i, bar in enumerate(bars):
+    ax3.text(
         probs[i] + 0.01,
-        i,
+        bar.get_y() + bar.get_height() / 2,
         f"{probs[i]:.3f}",
-        va="center"
+        va="center",
     )
+
+# Big predicted-class text in bottom center (2nd row, middle)
+ax_pred_text = plt.subplot(2, 3, 5)
+ax_pred_text.text(
+    0.5,
+    0.5,
+    f"Predicted Class: {pred_class}",
+    ha="center",
+    va="center",
+    fontsize=16,
+    fontweight="normal",
+)
+ax_pred_text.axis("off")
 
 plt.tight_layout()
 
