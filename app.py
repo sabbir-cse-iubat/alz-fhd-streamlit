@@ -41,21 +41,24 @@ def gdrive_direct_url(file_id: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# 2. MODEL LOADING VIA GDOWN
+# 2. MODEL LOADING VIA GDOWN (NO UI MESSAGES)
 # ---------------------------------------------------------------------
 def _download_model_if_needed(file_id: str, filename: str) -> str:
     """
     Use gdown to download from Google Drive into MODEL_CACHE_DIR.
     Returns the local file path.
+
+    IMPORTANT: No st.info here → no blue boxes in UI.
     """
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
 
     if not os.path.exists(local_path):
         url = gdrive_direct_url(file_id)
-
         try:
+            # quiet=True → no progress text printed
             gdown.download(url, local_path, quiet=True)
         except Exception as e:
+            # Only show something if it actually fails
             st.error(f"Failed to download {filename} from Google Drive.\nError: {e}")
             raise
 
@@ -68,7 +71,10 @@ def _download_model_if_needed(file_id: str, filename: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def load_single_model(model_name: str):
-
+    """
+    Download (first time) + load the requested model using gdown.
+    model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
+    """
     if model_name == "DenseNet121":
         file_id = DENSENET_ID
         fname = "densenet_alz_fhd.keras"
@@ -298,7 +304,6 @@ to classify Alzheimer MRI scans into **four classes**.
 col_info, col_out = st.columns([1, 1])
 
 with col_info:
-    # NEW: helper text always at top of this block
     st.info("👈 Select a model & image, then click **Run prediction**.")
     st.subheader("Selected options")
     st.write(f"**Model:** {model_name}")
@@ -310,7 +315,6 @@ with col_info:
     else:
         st.write(f"**Uploaded file:** `{chosen_file.name}`")
 
-# Early exit if button not pressed (no extra info message now)
 if not run_button:
     st.stop()
 
@@ -326,7 +330,6 @@ orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 with st.spinner("Running prediction…"):
     if model_name == "FHD-HybridNet":
         probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
-        # CHANGED: do not expose backbone name in Grad-CAM title
         cam_title = "FHD-HybridNet"
     else:
         model = load_single_model(model_name)
@@ -343,26 +346,21 @@ with st.spinner("Computing Grad-CAM…"):
     overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
 
 # ---------------------------------------------------------------------
-# 9. FIXED VISUAL OUTPUT (PLACED BELOW SELECTED OPTIONS)
+# 9. PREDICTION OUTPUT
 # ---------------------------------------------------------------------
-
 st.markdown("---")
 st.subheader("Prediction Output")
 
-# ► Show combined figure (original + GradCAM + bar chart)
 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-# ---- Left: Original Image ----
 axes[0].imshow(orig_img)
 axes[0].set_title(f"Original Image\nClass Name: {pred_class}")
 axes[0].axis("off")
 
-# ---- Middle: GradCAM ----
 axes[1].imshow(overlay)
 axes[1].set_title(f"Grad-CAM\n{cam_title}")
 axes[1].axis("off")
 
-# ---- Right: Probability Bar Chart ----
 axes[2].barh(CLASS_NAMES, probs)
 axes[2].set_xlim(0, 1)
 axes[2].set_xlabel("Probability")
@@ -372,14 +370,9 @@ for i, cls in enumerate(CLASS_NAMES):
     axes[2].text(probs[i] + 0.01, i, f"{probs[i]:.3f}", va="center")
 
 plt.tight_layout()
-
-# Show figure
 st.pyplot(fig)
 
-# ► Show Predicted Class only
-st.markdown(f"""
-#### Final Prediction : *{pred_class}*
-""")
+st.markdown(f"#### Final Prediction : *{pred_class}*")
 
 # ---------------------------------------------------------------------
 # 10. Save generated image
