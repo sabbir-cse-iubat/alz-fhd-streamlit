@@ -301,6 +301,8 @@ to classify Alzheimer MRI scans into **four classes**.
 col_info, col_out = st.columns([1, 2])
 
 with col_info:
+    # NEW: helper text always at top of this block
+    st.info("👈 Select a model & image, then click **Run prediction**.")
     st.subheader("Selected options")
     st.write(f"**Model:** {model_name}")
     st.write(f"**Source:** {source}")
@@ -311,9 +313,8 @@ with col_info:
     else:
         st.write(f"**Uploaded file:** `{chosen_file.name}`")
 
+# Early exit if button not pressed (no extra info message now)
 if not run_button:
-    with col_out:
-        st.info("👈 Select a model & image, then click **Run prediction**.")
     st.stop()
 
 if chosen_file is None:
@@ -328,7 +329,8 @@ orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 with st.spinner("Running prediction…"):
     if model_name == "FHD-HybridNet":
         probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
-        cam_title = f"FHD-HybridNet ({chosen_key})"
+        # CHANGED: do not expose backbone name in Grad-CAM title
+        cam_title = "FHD-HybridNet"
     else:
         model = load_single_model(model_name)
         preds = model.predict(batch, verbose=0)[0]
