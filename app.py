@@ -17,6 +17,101 @@ st.set_page_config(
     layout="wide"
 )
 
+# ----- Global custom CSS (only visuals, no logic change) -----
+st.markdown(
+    """
+    <style>
+    /* Overall background */
+    .stApp {
+        background: radial-gradient(circle at top left, #f4f7ff 0, #ffffff 45%, #f9fbff 100%);
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background: #f5f7fb;
+        border-right: 1px solid #e2e6f0;
+    }
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2, 
+    section[data-testid="stSidebar"] h3 {
+        color: #1f2933;
+    }
+
+    /* Title */
+    h1 {
+        font-weight: 800 !important;
+        letter-spacing: 0.03em;
+        color: #111827 !important;
+    }
+
+    /* Subheaders */
+    h2, h3, h4 {
+        color: #111827 !important;
+    }
+
+    /* Info / card style blocks */
+    .info-card {
+        background-color: #ffffff;
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+    }
+
+    .prediction-card {
+        background-color: #ffffff;
+        border-radius: 1rem;
+        padding: 1.25rem 1.5rem 1rem 1.5rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.09);
+    }
+
+    .final-pred {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #111827;
+    }
+
+    /* Buttons */
+    .stButton>button {
+        border-radius: 999px;
+        padding: 0.45rem 1.1rem;
+        border: none;
+        font-weight: 600;
+    }
+    .stButton>button:hover {
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.20);
+        transform: translateY(-1px);
+    }
+
+    /* Sidebar buttons slightly tighter */
+    section[data-testid="stSidebar"] .stButton>button {
+        width: 100%;
+    }
+
+    /* Download button main area */
+    .stDownloadButton>button {
+        border-radius: 999px;
+        border: none;
+        font-weight: 600;
+        background: #111827;
+        color: #f9fafb;
+    }
+    .stDownloadButton>button:hover {
+        background: #020617;
+    }
+
+    /* Divider spacing */
+    hr {
+        margin-top: 1.5rem;
+        margin-bottom: 1.2rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 SAMPLE_DIR = "sample_images"
 os.makedirs(SAMPLE_DIR, exist_ok=True)
 
@@ -41,24 +136,22 @@ def gdrive_direct_url(file_id: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# 2. MODEL LOADING VIA GDOWN (NO UI MESSAGES)
+# 2. MODEL LOADING VIA GDOWN
 # ---------------------------------------------------------------------
 def _download_model_if_needed(file_id: str, filename: str) -> str:
     """
     Use gdown to download from Google Drive into MODEL_CACHE_DIR.
     Returns the local file path.
-
-    IMPORTANT: No st.info here → no blue boxes in UI.
     """
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
 
     if not os.path.exists(local_path):
         url = gdrive_direct_url(file_id)
+
         try:
-            # quiet=True → no progress text printed
+            # quiet=True to hide progress spam in UI
             gdown.download(url, local_path, quiet=True)
         except Exception as e:
-            # Only show something if it actually fails
             st.error(f"Failed to download {filename} from Google Drive.\nError: {e}")
             raise
 
@@ -287,7 +380,6 @@ else:
         st.sidebar.warning("No images found in sample_images/")
 
 run_button = st.sidebar.button("▶ Run prediction")
-save_placeholder = st.sidebar.empty()
 
 # ---------------------------------------------------------------------
 # 7. MAIN AREA HEADER
@@ -304,8 +396,28 @@ to classify Alzheimer MRI scans into **four classes**.
 col_info, col_out = st.columns([1, 1])
 
 with col_info:
-    st.info("👈 Select a model & image, then click **Run prediction**.")
-    st.subheader("Selected options")
+    # Helper text + options inside a card
+    st.markdown(
+        """
+        <div class="info-card">
+            <p style="margin:0 0 0.6rem 0; font-weight:600; color:#111827;">
+                👈 Workflow
+            </p>
+            <p style="margin:0 0 0.9rem 0; font-size:0.92rem; color:#4b5563;">
+                Select a model and MRI image on the left, then click 
+                <strong>Run prediction</strong>.
+            </p>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+            <p style="margin:0 0 0.4rem 0; font-weight:600; color:#111827;">
+                Selected options
+            </p>
+        """,
+        unsafe_allow_html=True,
+    )
     st.write(f"**Model:** {model_name}")
     st.write(f"**Source:** {source}")
     if isinstance(chosen_file, str):
@@ -314,7 +426,9 @@ with col_info:
         st.write("_No image selected yet._")
     else:
         st.write(f"**Uploaded file:** `{chosen_file.name}`")
+    st.markdown("</div>", unsafe_allow_html=True)
 
+# Early exit if button not pressed
 if not run_button:
     st.stop()
 
@@ -330,6 +444,7 @@ orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 with st.spinner("Running prediction…"):
     if model_name == "FHD-HybridNet":
         probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
+        # Keep backbone hidden in title
         cam_title = "FHD-HybridNet"
     else:
         model = load_single_model(model_name)
@@ -346,21 +461,29 @@ with st.spinner("Computing Grad-CAM…"):
     overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
 
 # ---------------------------------------------------------------------
-# 9. PREDICTION OUTPUT
+# 9. FIXED VISUAL OUTPUT (PLACED BELOW SELECTED OPTIONS)
 # ---------------------------------------------------------------------
+
 st.markdown("---")
 st.subheader("Prediction Output")
 
+# Wrap figure + text in a card
+st.markdown('<div class="prediction-card">', unsafe_allow_html=True)
+
+# ► Show combined figure (original + GradCAM + bar chart)
 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
+# ---- Left: Original Image ----
 axes[0].imshow(orig_img)
 axes[0].set_title(f"Original Image\nClass Name: {pred_class}")
 axes[0].axis("off")
 
+# ---- Middle: GradCAM ----
 axes[1].imshow(overlay)
 axes[1].set_title(f"Grad-CAM\n{cam_title}")
 axes[1].axis("off")
 
+# ---- Right: Probability Bar Chart ----
 axes[2].barh(CLASS_NAMES, probs)
 axes[2].set_xlim(0, 1)
 axes[2].set_xlabel("Probability")
@@ -370,12 +493,22 @@ for i, cls in enumerate(CLASS_NAMES):
     axes[2].text(probs[i] + 0.01, i, f"{probs[i]:.3f}", va="center")
 
 plt.tight_layout()
+
+# Show figure
 st.pyplot(fig)
 
-st.markdown(f"#### Final Prediction : *{pred_class}*")
+# ► Show Predicted Class only + download button right after
+st.markdown(
+    f"""
+    <p class="final-pred">
+        Final Prediction : <em>{pred_class}</em>
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ---------------------------------------------------------------------
-# 10. Save generated image (placed right after final prediction text)
+# 10. Save generated image
 # ---------------------------------------------------------------------
 buf = io.BytesIO()
 fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
@@ -388,3 +521,4 @@ st.download_button(
     mime="image/png"
 )
 
+st.markdown("</div>", unsafe_allow_html=True)
