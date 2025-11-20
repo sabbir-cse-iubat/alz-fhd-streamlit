@@ -357,7 +357,7 @@ fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
 # ---- Left: Original Image ----
 axes[0].imshow(orig_img)
-axes[0].set_title(f"Original Image\nTrue Prediction: {pred_class}")
+axes[0].set_title(f"Original Image\nClass Name: {pred_class}")
 axes[0].axis("off")
 
 # ---- Middle: GradCAM ----
