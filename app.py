@@ -3,11 +3,12 @@ import io
 import warnings
 import numpy as np
 import tensorflow as tf
+import streamlit as st
+import gdown
+
 from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
-import streamlit as st
-import gdown
 from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
 
 warnings.filterwarnings("ignore", category=UserWarning, module="keras")
@@ -15,11 +16,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="keras")
 # --------------------------------------------------------------------
 # BASIC CONFIG
 # --------------------------------------------------------------------
-st.set_page_config(
-    page_title="FHD-HybridNet Alzheimer MRI Classifier",
-    layout="wide",
-)
-
 CLASS_NAMES = [
     "MildDemented",
     "ModerateDemented",
@@ -35,51 +31,106 @@ if "last_result_png" not in st.session_state:
     st.session_state["last_result_png"] = None
 
 # --------------------------------------------------------------------
-# GOOGLE DRIVE MODEL IDs (YOUR LINKS -> IDs)
+# GOOGLE DRIVE MODEL IDs (YOUR TRAINED MODELS)
 # --------------------------------------------------------------------
+# densenet : https://drive.google.com/file/d/1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO/view?usp=drive_link
+# mobilenet: https://drive.google.com/file/d/1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0/view?usp=drive_link
+# resnet   : https://drive.google.com/file/d/1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW/view?usp=drive_link
+
 DENSENET_ID  = "1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO"
 MOBILENET_ID = "1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0"
 RESNET_ID    = "1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW"
 
-def direct_url(file_id: str) -> str:
+
+def gdrive_direct_url(file_id: str) -> str:
+    """Direct download URL usable by gdown."""
     return f"https://drive.google.com/uc?id={file_id}"
 
 # --------------------------------------------------------------------
-# MODEL DOWNLOADER + LOADERS
+# GDOWN DOWNLOADER — ONLY THIS, NO tf.keras.utils.get_file
 # --------------------------------------------------------------------
-def download_model(file_id: str, filename: str) -> str:
+def _download_model_if_needed(file_id: str, filename: str) -> str:
+    """
+    Use gdown to download from Google Drive into MODEL_CACHE_DIR.
+    Returns the local file path. Only downloads once.
+    """
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
 
-    if not os.path.exists(local_path):
-        st.sidebar.info(f"📥 Downloading {filename} (first time only)...")
-        gdown.download(direct_url(file_id), local_path, quiet=False)
+    # Already downloaded
+    if os.path.exists(local_path):
+        return local_path
+
+    url = gdrive_direct_url(file_id)
+    st.sidebar.info(f"📥 Downloading model: {filename} (first time only)…")
+
+    try:
+        gdown.download(url, local_path, quiet=False)
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to download {filename} from Google Drive.\n\n{e}")
+        raise
 
     if not os.path.exists(local_path):
-        raise FileNotFoundError(f"Download failed: {local_path}")
+        # Download failed or file not created (e.g. wrong sharing / non-public file)
+        raise FileNotFoundError(
+            f"Download seems to have failed; file not found at {local_path}"
+        )
 
     return local_path
 
-
+# --------------------------------------------------------------------
+# SINGLE MODEL LOADER (Keras)
+# --------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_single_model(model_name: str):
+    """
+    Download (if needed) + load the requested model.
+    model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
+    """
     if model_name == "DenseNet121":
-        path = download_model(DENSENET_ID, "densenet_alz_fhd.keras")
+        file_id = DENSENET_ID
+        fname = "densenet_alz_fhd.keras"
     elif model_name == "MobileNetV1":
-        path = download_model(MOBILENET_ID, "mobilenet_alz_fhd.keras")
+        file_id = MOBILENET_ID
+        fname = "mobilenet_alz_fhd.keras"
     elif model_name == "ResNet50V2":
-        path = download_model(RESNET_ID, "resnet_alz_fhd.keras")
+        file_id = RESNET_ID
+        fname = "resnet_alz_fhd.keras"
     else:
-        raise ValueError(f"Unknown model: {model_name}")
+        raise ValueError(f"Unknown model_name: {model_name}")
 
-    return tf.keras.models.load_model(path, compile=False)
+    local_path = _download_model_if_needed(file_id, fname)
 
+    try:
+        model = tf.keras.models.load_model(local_path, compile=False)
+    except Exception as e:
+        st.error(
+            "❌ Failed to load model from file.\n\n"
+            f"Path: `{local_path}`\n"
+            "Common causes:\n"
+            "• File is not actually a `.keras` model (e.g. zipped or HTML)\n"
+            "• Upload/training saved in a different format\n\n"
+            f"Raw error:\n{e}"
+        )
+        raise
 
+    return model
+# --------------------------------------------------------------------
+# ALL BASE MODELS LOADER (for FHD-HybridNet)
+# --------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_all_base_models():
+    """
+    Load all three backbones once and reuse them.
+    Keys are the exact backbone names used in ensemble_predict_fhd_single.
+    """
+    dn = load_single_model("DenseNet121")
+    mb = load_single_model("MobileNetV1")
+    rn = load_single_model("ResNet50V2")
+
     return {
-        "DenseNet121": load_single_model("DenseNet121"),
-        "MobileNetV1": load_single_model("MobileNetV1"),
-        "ResNet50V2": load_single_model("ResNet50V2"),
+        "DenseNet121": dn,
+        "MobileNetV1": mb,
+        "ResNet50V2": rn,
     }
 
 # --------------------------------------------------------------------
@@ -147,31 +198,30 @@ def overlay_heatmap_on_image(heatmap, pil_img, alpha=0.45):
 # --------------------------------------------------------------------
 # FHD ENSEMBLE
 # --------------------------------------------------------------------
-def fuzzy_hellinger_distance(p1, p2):
-    return 0.5 * np.sum((np.sqrt(p1) - np.sqrt(p2)) ** 2)
-
-
 def ensemble_predict_fhd_single(img_batch):
-    models = load_all_base_models()
-    preds_dict = {
-        name: m.predict(img_batch, verbose=0)[0]
-        for name, m in models.items()
-    }
+    models_dict = load_all_base_models()
+    keys = ["DenseNet121", "MobileNetV1", "ResNet50V2"]
 
-    keys = list(preds_dict.keys())
-    avg_dists = []
-
+    preds_list = []
     for k in keys:
-        others = [o for o in keys if o != k]
-        d = np.mean([fuzzy_hellinger_distance(preds_dict[k], preds_dict[o]) for o in others])
-        avg_dists.append(d)
+        preds_list.append(models_dict[k].predict(img_batch, verbose=0)[0])
 
-    best_idx = int(np.argmin(avg_dists))
+    m_count = len(preds_list)
+    avg_fhd = []
+    for m1 in range(m_count):
+        dists = []
+        for m2 in range(m_count):
+            if m1 == m2:
+                continue
+            dists.append(fuzzy_hellinger_distance(preds_list[m1], preds_list[m2]))
+        avg_fhd.append(np.mean(dists))
+
+    best_idx = int(np.argmin(avg_fhd))
+    chosen_probs = preds_list[best_idx]
     chosen_key = keys[best_idx]
-    chosen_probs = preds_dict[chosen_key]
     pred_idx = int(np.argmax(chosen_probs))
+    return pred_idx, chosen_probs, chosen_key
 
-    return chosen_probs, pred_idx, chosen_key, models[chosen_key]
 
 # --------------------------------------------------------------------
 # SIDEBAR UI (AS BEFORE)
