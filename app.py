@@ -52,7 +52,7 @@ def _download_model_if_needed(file_id: str, filename: str) -> str:
 
     if not os.path.exists(local_path):
         url = gdrive_direct_url(file_id)
-        st.info(f"📥 Downloading model: {filename} (first time only)")
+
         try:
             gdown.download(url, local_path, quiet=False)
         except Exception as e:
