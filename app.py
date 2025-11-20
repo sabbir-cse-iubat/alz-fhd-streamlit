@@ -23,9 +23,9 @@ CLASS_NAMES = [
 SAMPLE_DIR = "sample_images"
 
 # === TODO: এখানকার তিনটা URL তোমার নিজের model (.keras) ফাইলের direct link দিও ===
-DENSENET_URL = "https://example.com/densenet_alz_fhd.keras"
-MOBILENET_URL = "https://example.com/mobilenet_alz_fhd.keras"
-RESNET_URL = "https://example.com/resnet_alz_fhd.keras"
+DENSENET_URL = "https://drive.google.com/file/d/1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO/view?usp=drive_link"
+MOBILENET_URL = "https://drive.google.com/file/d/1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0/view?usp=drive_link"
+RESNET_URL = "https://drive.google.com/file/d/1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW/view?usp=drive_link"
 
 
 # -------------------------------------------------------------------
