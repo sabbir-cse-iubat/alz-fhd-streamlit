@@ -5,6 +5,7 @@ from PIL import Image
 import streamlit as st
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import gdown
 
 from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
 
@@ -23,6 +24,10 @@ IMG_SIZE = (224, 224)
 
 CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
 
+# Local folder where we will store downloaded models
+MODEL_CACHE_DIR = "models_cache"
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+
 # ---------------------------------------------------------------------
 # 1. GOOGLE DRIVE MODEL LINKS (YOUR LINKS -> IDs)
 # ---------------------------------------------------------------------
@@ -35,18 +40,42 @@ MOBILENET_ID = "1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0"
 RESNET_ID    = "1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW"
 
 
-def gdrive_url(file_id: str) -> str:
-    """Convert a Drive file id to a direct download URL."""
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
+def gdrive_direct_url(file_id: str) -> str:
+    """Direct download URL for gdown."""
+    return f"https://drive.google.com/uc?id={file_id}"
 
 
 # ---------------------------------------------------------------------
-# 2. MODEL LOADING (CACHED, NO MANUAL PATH)
+# 2. MODEL LOADING VIA GDOWN (NO .keras/datasets PATH)
 # ---------------------------------------------------------------------
+def _download_model_if_needed(file_id: str, filename: str) -> str:
+    """
+    Use gdown to download from Google Drive into MODEL_CACHE_DIR.
+    Returns the local file path.
+    """
+    local_path = os.path.join(MODEL_CACHE_DIR, filename)
+
+    if not os.path.exists(local_path):
+        url = gdrive_direct_url(file_id)
+        st.info(f"📥 Downloading model: {filename} (first time only)")
+        try:
+            gdown.download(url, local_path, quiet=False)
+        except Exception as e:
+            st.error(f"Failed to download {filename} from Google Drive.\nError: {e}")
+            raise
+
+    if not os.path.exists(local_path):
+        # Download failed or file not created
+        st.error(f"Model file {filename} was not created. Check Drive sharing / ID.")
+        raise FileNotFoundError(local_path)
+
+    return local_path
+
+
 @st.cache_resource(show_spinner=False)
 def load_single_model(model_name: str):
     """
-    Download (first time) + load the requested model.
+    Download (first time) + load the requested model using gdown.
     model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
     """
     if model_name == "DenseNet121":
@@ -61,15 +90,17 @@ def load_single_model(model_name: str):
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
 
-    url = gdrive_url(file_id)
+    local_path = _download_model_if_needed(file_id, fname)
 
-    # Let keras handle cache path completely
-    local_path = tf.keras.utils.get_file(
-        fname=fname,
-        origin=url
-    )
+    try:
+        model = tf.keras.models.load_model(local_path, compile=False)
+    except Exception as e:
+        st.error(
+            f"Failed to load model from {local_path}.\n"
+            f"This usually means the file is not a valid Keras model.\n\nError: {e}"
+        )
+        raise
 
-    model = tf.keras.models.load_model(local_path, compile=False)
     return model
 
 
@@ -104,17 +135,14 @@ def get_last_conv_layer_name(model):
     """Try to find a suitable last convolution layer for Grad-CAM."""
     conv_types = (Conv2D, DepthwiseConv2D, SeparableConv2D)
 
-    # First: look for explicit conv-like layers
     for layer in reversed(model.layers):
         if isinstance(layer, conv_types):
             return layer.name
-        # Unwrap nested models / Sequential inside Functional
         if hasattr(layer, "layers"):
             for sub in reversed(layer.layers):
                 if isinstance(sub, conv_types):
                     return sub.name
 
-    # Fallback: any 4D output layer
     for layer in reversed(model.layers):
         try:
             out_shape = layer.output_shape
@@ -143,7 +171,7 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
 
     grads = tape.gradient(class_channel, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_outputs = conv_outputs[0]  # (H, W, C)
+    conv_outputs = conv_outputs[0]
 
     heatmap = tf.reduce_sum(pooled_grads * conv_outputs, axis=-1)
     heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
@@ -176,10 +204,6 @@ def fuzzy_hellinger_distance(p1, p2):
 
 
 def ensemble_predict_fhd_single(models_dict, img_batch):
-    """
-    Run all three backbones, compute FHD between their probability vectors,
-    and choose the backbone with minimal average distance (max consensus).
-    """
     keys = ["DenseNet", "MobileNet", "ResNet"]
     preds_list = []
 
@@ -206,7 +230,6 @@ def ensemble_predict_fhd_single(models_dict, img_batch):
 
 
 def run_fhd_ensemble(img_batch):
-    """Wrapper for FHD-HybridNet."""
     models_dict = load_all_base_models()
     probs, pred_idx, chosen_key = ensemble_predict_fhd_single(models_dict, img_batch)
     grad_model = models_dict[chosen_key]
