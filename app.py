@@ -6,6 +6,8 @@ import streamlit as st
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
+from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
+
 # ---------------------------------------------------------------------
 # 0. BASIC SETUP
 # ---------------------------------------------------------------------
@@ -14,23 +16,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# Folder where models will be cached after first download
-MODEL_DIR = "alz_fhd_models"
-os.makedirs(MODEL_DIR, exist_ok=True)
-
 SAMPLE_DIR = "sample_images"
-os.makedirs(SAMPLE_DIR, exist_ok=True)  # safe if already exists
+os.makedirs(SAMPLE_DIR, exist_ok=True)
 
-# Image size used in your training
 IMG_SIZE = (224, 224)
 
-# Class names (must match training order)
 CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
 
 # ---------------------------------------------------------------------
-# 1. GOOGLE DRIVE MODEL LINKS (YOUR LINKS)
+# 1. GOOGLE DRIVE MODEL LINKS (YOUR LINKS -> IDs)
 # ---------------------------------------------------------------------
-# You gave:
 # densenet : https://drive.google.com/file/d/1jPnrxTcTI8WW7d1Xwcudf40k4tf6SIXO/view?usp=drive_link
 # mobilenet: https://drive.google.com/file/d/1eQLv6ruj64RAxiXQ9Vl-fUwkzXeYl8m0/view?usp=drive_link
 # resnet   : https://drive.google.com/file/d/1tnyMBE16BEBSBBx5jKQdzWNTxr1huBcW/view?usp=drive_link
@@ -46,7 +41,7 @@ def gdrive_url(file_id: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# 2. MODEL LOADING (CACHED)
+# 2. MODEL LOADING (CACHED, NO MANUAL PATH)
 # ---------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def load_single_model(model_name: str):
@@ -55,28 +50,24 @@ def load_single_model(model_name: str):
     model_name ∈ {"DenseNet121", "MobileNetV1", "ResNet50V2"}
     """
     if model_name == "DenseNet121":
-        file_name = "densenet_alz_fhd.keras"
         file_id = DENSENET_ID
+        fname = "densenet_alz_fhd.keras"
     elif model_name == "MobileNetV1":
-        file_name = "mobilenet_alz_fhd.keras"
         file_id = MOBILENET_ID
+        fname = "mobilenet_alz_fhd.keras"
     elif model_name == "ResNet50V2":
-        file_name = "resnet_alz_fhd.keras"
         file_id = RESNET_ID
+        fname = "resnet_alz_fhd.keras"
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
 
-    local_path = os.path.join(MODEL_DIR, file_name)
+    url = gdrive_url(file_id)
 
-    if not os.path.exists(local_path):
-        url = gdrive_url(file_id)
-        st.info(f"📥 Downloading {model_name} weights… (first time only)")
-        local_path = tf.keras.utils.get_file(
-            fname=file_name,
-            origin=url,
-            cache_dir=".",
-            cache_subdir=MODEL_DIR
-        )
+    # Let keras handle cache path completely
+    local_path = tf.keras.utils.get_file(
+        fname=fname,
+        origin=url
+    )
 
     model = tf.keras.models.load_model(local_path, compile=False)
     return model
@@ -109,9 +100,6 @@ def load_image_from_file(file, img_size=IMG_SIZE):
 # ---------------------------------------------------------------------
 # 4. GRAD-CAM HELPERS
 # ---------------------------------------------------------------------
-from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
-
-
 def get_last_conv_layer_name(model):
     """Try to find a suitable last convolution layer for Grad-CAM."""
     conv_types = (Conv2D, DepthwiseConv2D, SeparableConv2D)
@@ -252,7 +240,6 @@ if source == "Upload MRI":
     if uploaded is not None:
         chosen_file = uploaded
 else:
-    # create dummy list if folder empty to avoid error
     try:
         files = sorted(
             [f for f in os.listdir(SAMPLE_DIR)
@@ -268,8 +255,6 @@ else:
         st.sidebar.warning("No images found in sample_images/")
 
 run_button = st.sidebar.button("▶ Run prediction")
-
-# Placeholder for save button later
 save_placeholder = st.sidebar.empty()
 
 # ---------------------------------------------------------------------
@@ -284,9 +269,6 @@ to classify Alzheimer MRI scans into **four classes**.
 """
 )
 
-# ---------------------------------------------------------------------
-# 8. MAIN LOGIC
-# ---------------------------------------------------------------------
 col_info, col_out = st.columns([1, 2])
 
 with col_info:
@@ -309,10 +291,11 @@ if chosen_file is None:
     st.error("Please upload or select an image first.")
     st.stop()
 
-# Load image & batch
+# ---------------------------------------------------------------------
+# 8. LOAD IMAGE & RUN MODEL
+# ---------------------------------------------------------------------
 orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 
-# Run model
 with st.spinner("Running prediction…"):
     if model_name == "FHD-HybridNet":
         probs, pred_idx, chosen_key, grad_model = run_fhd_ensemble(batch)
@@ -327,7 +310,6 @@ with st.spinner("Running prediction…"):
 
 pred_class = CLASS_NAMES[pred_idx]
 
-# Grad-CAM
 with st.spinner("Computing Grad-CAM…"):
     heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
     overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
@@ -337,17 +319,14 @@ with st.spinner("Computing Grad-CAM…"):
 # ---------------------------------------------------------------------
 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-# Original
 axes[0].imshow(orig_img)
 axes[0].set_title(f"Original\nPredicted: {pred_class}")
 axes[0].axis("off")
 
-# Grad-CAM
 axes[1].imshow(overlay)
 axes[1].set_title(f"Grad-CAM\n{cam_title}")
 axes[1].axis("off")
 
-# Probabilities
 axes[2].barh(CLASS_NAMES, probs)
 axes[2].set_xlim(0, 1)
 axes[2].set_xlabel("Probability")
@@ -370,7 +349,6 @@ with col_out:
     for i, cls in enumerate(CLASS_NAMES):
         st.write(f"- **{cls:16s}**: {probs[i]:.4f}")
 
-# Save result image button
 buf = io.BytesIO()
 fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
 buf.seek(0)
