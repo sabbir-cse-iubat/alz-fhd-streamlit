@@ -8,8 +8,8 @@ import streamlit as st
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import gdown
-
-from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
+from scipy.ndimage import gaussian_filter
+import cv2
 
 # ============================================================
 # 0. BASIC SETUP
@@ -51,52 +51,27 @@ def _is_probably_html(path: str) -> bool:
 def _validate_download(path: str):
     if not os.path.exists(path):
         raise FileNotFoundError(path)
-
     size = os.path.getsize(path)
-
     if size < 50000:
-        raise RuntimeError(
-            "Downloaded model looks invalid. "
-            "Check Google Drive sharing and File ID."
-        )
+        raise RuntimeError("Downloaded model looks invalid. Check Google Drive sharing and File ID.")
 
 def _download_if_needed(file_id: str, filename: str) -> str:
-
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
-
     if os.path.exists(local_path):
         return local_path
-
-    url = f"https://drive.google.com/uc?id={file_id}"
-
-    gdown.download(
-        url=url,
-        output=local_path,
-        quiet=False
-    )
-
+    url = gdrive_direct_url(file_id)
+    gdown.download(url=url, output=local_path, quiet=False)
     _validate_download(local_path)
-
     return local_path
 
 # ============================================================
-# 1. BUILD MODELS
+# 1. LOAD MODELS
 # ============================================================
 @st.cache_resource(show_spinner=False)
-@st.cache_resource(show_spinner=False)
 def load_single_model(model_name):
-
     filename, file_id = MODEL_FILES[model_name]
-
-    local_path = _download_if_needed(
-        file_id,
-        filename
-    )
-
-    return tf.keras.models.load_model(
-        local_path,
-        compile=False
-    )
+    local_path = _download_if_needed(file_id, filename)
+    return tf.keras.models.load_model(local_path, compile=False)
 
 @st.cache_resource(show_spinner=False)
 def load_all_models():
@@ -120,113 +95,133 @@ def load_image_from_file(file, img_size=IMG_SIZE):
     return img, batch
 
 # ============================================================
-# 3. GRAD-CAM HELPERS
+# 3. BRAIN TISSUE MASKING (FROM NOTEBOOK)
 # ============================================================
-def get_last_conv_layer_name(model):
-    conv_layers = []
+def tissue_mask_from_rgb(rgb01: np.ndarray) -> np.ndarray:
+    """Extract brain tissue mask from RGB image."""
+    gray = rgb01.mean(axis=2)
+    vals = gray[gray > 0]
+    if vals.size == 0:
+        return np.ones_like(gray, dtype=np.float32)
+    thr = max(0.02, np.percentile(vals, 5))
+    m = (gray > thr).astype(np.float32)
+    m = gaussian_filter(m, sigma=1.5)
+    return np.clip(m, 0, 1)
 
-    for layer in model.layers:
-        try:
-            out = layer.output
-            shape = out.shape
+def robust_norm(cam, mask=None, p_low=2, p_high=98):
+    """Percentile-based normalization."""
+    cam = cam.astype(np.float32)
+    if mask is not None:
+        vals = cam[mask > 0.2]
+        if vals.size < 50:
+            vals = cam.reshape(-1)
+    else:
+        vals = cam.reshape(-1)
+    lo, hi = np.percentile(vals, [p_low, p_high])
+    out = (cam - lo) / (hi - lo + 1e-8)
+    out = np.clip(out, 0, 1)
+    if mask is not None:
+        out *= mask
+        if out.max() > 0:
+            out = out / (out.max() + 1e-8)
+    return out
 
-            if len(shape) == 4:
-                conv_layers.append(layer.name)
+def process_cam_focus(cam01, out_h, out_w, tissue_mask01, sigma=2.0, thr_pct=80, power=0.9):
+    """Process CAM with tissue masking, smoothing, thresholding."""
+    cam = np.clip(cam01.astype(np.float32), 0, 1)
+    
+    # Resize to output dimensions
+    cam = np.array(Image.fromarray((cam*255).astype(np.uint8)).resize((out_w, out_h), Image.BILINEAR)).astype(np.float32) / 255.0
+    
+    # Smooth
+    cam = gaussian_filter(cam, sigma=float(sigma))
+    cam = cam - cam.min()
+    if cam.max() > 0:
+        cam = cam / cam.max()
+    
+    # Apply tissue mask
+    cam = cam * np.clip(tissue_mask01, 0, 1)
+    cam = robust_norm(cam, tissue_mask01, p_low=2, p_high=98)
+    
+    # Threshold
+    vals = cam[cam > 0]
+    if vals.size > 20:
+        thr = np.percentile(vals, float(thr_pct))
+        cam = np.where(cam >= thr, cam, 0.0)
+    
+    # Normalize
+    if cam.max() > 0:
+        cam = cam / (cam.max() + 1e-8)
+    
+    # Final smooth
+    cam = gaussian_filter(cam, sigma=max(1.0, float(sigma)*0.6))
+    if cam.max() > 0:
+        cam = cam / (cam.max() + 1e-8)
+    
+    # Power adjustment for contrast
+    cam = cam ** float(power)
+    return cam
 
-        except Exception:
-            continue
+# ============================================================
+# 4. ADVANCED GRAD-CAM (FROM NOTEBOOK)
+# ============================================================
+def find_last_conv2d_layer_name(model):
+    """Find the last Conv2D layer in the model."""
+    for layer in reversed(model.layers):
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            return layer.name
+    for layer in reversed(model.layers):
+        if "conv" in layer.name.lower():
+            return layer.name
+    raise ValueError("No Conv2D-like layer found for this model.")
 
-    if not conv_layers:
-        raise ValueError("No convolution layer found.")
-
-    return conv_layers[-1]
-
-def make_gradcam_heatmap(model, img_array, class_index=None):
-
-    last_conv_name = get_last_conv_layer_name(model)
-
-    grad_model = tf.keras.Model(
-        inputs=model.inputs,
-        outputs=[
-            model.get_layer(last_conv_name).output,
-            model.output
-        ]
+@tf.function
+def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
+    """Compute Grad-CAM heatmap."""
+    grad_model = tf.keras.models.Model(
+        inputs=[model.inputs],
+        outputs=[model.get_layer(target_layer_name).output, model.output]
     )
-
     with tf.GradientTape() as tape:
+        conv_out, preds = grad_model(img_tensor, training=False)
+        y = preds[:, class_index]
+    grads = tape.gradient(y, conv_out)
+    pooled_grads = tf.reduce_mean(grads, axis=(1, 2))
+    conv_out = conv_out[0]
+    pooled_grads = pooled_grads[0]
+    cam = tf.reduce_sum(conv_out * pooled_grads, axis=-1)
+    cam = tf.nn.relu(cam)
+    cam = cam - tf.reduce_min(cam)
+    if tf.reduce_max(cam) > 0:
+        cam = cam / (tf.reduce_max(cam) + 1e-8)
+    return cam
 
-        conv_outputs, predictions = grad_model(img_array, training=False)
-
-        if isinstance(conv_outputs, (list, tuple)):
-            conv_outputs = conv_outputs[0]
-
-        if isinstance(predictions, (list, tuple)):
-            predictions = predictions[0]
-
-        predictions = tf.convert_to_tensor(predictions)
-
-        if class_index is None:
-            class_index = tf.argmax(predictions[0])
-
-        class_channel = predictions[:, class_index]
-
-    grads = tape.gradient(class_channel, conv_outputs)
-
-    pooled_grads = tf.reduce_mean(
-        grads,
-        axis=(0, 1, 2)
+def make_gradcam_heatmap_with_focus(model, img_array, orig_img_rgb01, class_index=None, 
+                                     sigma=2.0, thr_pct=80, power=0.9):
+    """Compute Grad-CAM with tissue masking and processing."""
+    target_layer = find_last_conv2d_layer_name(model)
+    cam_small = gradcam_heatmap(model, img_array, class_index, target_layer).numpy()
+    
+    H, W = orig_img_rgb01.shape[:2]
+    tissue_mask = tissue_mask_from_rgb(orig_img_rgb01)
+    
+    cam_focus = process_cam_focus(
+        cam_small, out_h=H, out_w=W, tissue_mask01=tissue_mask,
+        sigma=sigma, thr_pct=thr_pct, power=power
     )
+    return cam_focus
 
-    conv_outputs = conv_outputs[0]
-
-    heatmap = tf.reduce_sum(
-        conv_outputs * pooled_grads,
-        axis=-1
-    )
-
-    heatmap = tf.maximum(heatmap, 0)
-
-    max_val = tf.reduce_max(heatmap)
-
-    if max_val > 0:
-        heatmap = heatmap / max_val
-
-    return heatmap.numpy()
-
-def overlay_heatmap_on_image(
-        heatmap,
-        pil_image,
-        alpha=0.40
-):
-
-    import cv2
-
-    img = np.asarray(pil_image).astype(np.float32) / 255.0
-
-    h, w = img.shape[:2]
-
-    heatmap = cv2.resize(heatmap, (w, h))
-
-    heatmap = np.uint8(255 * heatmap)
-
-    heatmap = cv2.applyColorMap(
-        heatmap,
-        cv2.COLORMAP_JET
-    )
-
-    heatmap = cv2.cvtColor(
-        heatmap,
-        cv2.COLOR_BGR2RGB
-    )
-
-    heatmap = heatmap.astype(np.float32) / 255.0
-
-    overlay = alpha * heatmap + (1 - alpha) * img
-
+def overlay_with_alpha(base_rgb01, cam01, alpha=0.50, cmap="jet"):
+    """Overlay heatmap on image with alpha blending."""
+    cmap_fn = plt.get_cmap(cmap)
+    cam_rgb = cmap_fn(np.clip(cam01, 0, 1))[:, :, :3]
+    alpha_map = alpha * (cam01 ** 0.7)
+    alpha_map = alpha_map * (cam01 > 0).astype(np.float32)
+    overlay = base_rgb01 * (1 - alpha_map[..., None]) + cam_rgb * alpha_map[..., None]
     return np.clip(overlay, 0, 1)
 
 # ============================================================
-# 4. ENSEMBLE HELPERS (Auto-combine all 3 models equally)
+# 5. ENSEMBLE HELPERS
 # ============================================================
 def ensemble_predict_simple(models_dict, img_batch):
     """Simple averaging ensemble of all 3 models."""
@@ -252,7 +247,7 @@ def ensemble_predict_simple(models_dict, img_batch):
     return pred_idx, avg_preds, keys[best_idx], models_dict[keys[best_idx]]
 
 # ============================================================
-# 5. MODERN UI STYLING
+# 6. MODERN UI STYLING
 # ============================================================
 st.markdown(
     """
@@ -411,7 +406,7 @@ footer { visibility: hidden; }
 )
 
 # ============================================================
-# 6. SIDEBAR
+# 7. SIDEBAR
 # ============================================================
 st.sidebar.markdown("## ⚙️ Controls")
 
@@ -465,7 +460,7 @@ else:
 run_button = st.sidebar.button("▶ Run Prediction", use_container_width=True)
 
 # ============================================================
-# 7. HERO HEADER
+# 8. HERO HEADER
 # ============================================================
 st.markdown(
     """
@@ -473,14 +468,15 @@ st.markdown(
   <h1>🧠 FCI-ResNetV2 Alzheimer MRI</h1>
   <p>
     Advanced CNN ensemble with <b>ResNet50V2, ResNet101V2, ResNet152V2</b> and 
-    <b>Grad-CAM visualization</b> for clinical brain MRI analysis. 
+    <b>Grad-CAM+ with brain tissue masking</b> for clinical MRI analysis. 
   </p>
   <div class="pills">
     <span class="pill">ResNet50V2</span>
     <span class="pill">ResNet101V2</span>
     <span class="pill">ResNet152V2</span>
     <span class="pill">Ensemble Mode</span>
-    <span class="pill">Grad-CAM</span>
+    <span class="pill">Grad-CAM+</span>
+    <span class="pill">Brain Masking</span>
   </div>
 </div>
 """,
@@ -498,8 +494,8 @@ if not run_button:
   <div class="small">
     1) Pick <b>Ensemble All 3</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
-    3) Click <b>▶ Run Prediction</b> to see probabilities + Grad-CAM heatmap<br/><br/>
-    <b style="color: #667eea;">💡 Tip:</b> Ensemble mode combines all 3 models for better accuracy!
+    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
+    <b style="color: #667eea;">💡 Features:</b> Brain tissue masking • Adaptive smoothing • Percentile normalization • Contrast enhancement
   </div>
 </div>
 """,
@@ -512,9 +508,10 @@ if chosen_file is None:
     st.stop()
 
 # ============================================================
-# 8. INFERENCE + GRADCAM
+# 9. INFERENCE + ADVANCED GRADCAM
 # ============================================================
 orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
+orig_img_arr = np.array(orig_img).astype("float32") / 255.0
 
 try:
     with st.spinner("🔄 Running prediction…"):
@@ -534,16 +531,20 @@ try:
     pred_class = CLASS_NAMES[pred_idx]
     confidence = float(np.max(probs))
 
-    with st.spinner("🎨 Computing Grad-CAM…"):
-        heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
-        overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
+    with st.spinner("🎨 Computing advanced Grad-CAM with brain masking…"):
+        heatmap = make_gradcam_heatmap_with_focus(
+            grad_model, batch, orig_img_arr, 
+            class_index=pred_idx,
+            sigma=2.0, thr_pct=80, power=0.9
+        )
+        overlay = overlay_with_alpha(orig_img_arr, heatmap, alpha=0.45, cmap="jet")
 
 except Exception as e:
     st.error(f"❌ Error: {str(e)}")
     st.stop()
 
 # ============================================================
-# 9. OUTPUT SECTION
+# 10. OUTPUT SECTION
 # ============================================================
 st.markdown(
     f"""
@@ -573,25 +574,35 @@ fig, axes = plt.subplots(
 )
 
 # Original
-axes[0].imshow(orig_img)
+axes[0].imshow(orig_img_arr)
 axes[0].set_title(f"Original MRI\n{pred_class}", fontsize=12, fontweight="bold", color="#667eea")
 axes[0].axis("off")
 
-# Grad-CAM overlay
-axes[1].imshow(overlay)
-axes[1].set_title(f"Grad-CAM Heatmap\n{cam_title}", fontsize=12, fontweight="bold", color="#667eea")
+# Grad-CAM heatmap
+axes[1].imshow(heatmap, cmap="jet", vmin=0, vmax=1)
+axes[1].set_title(f"Grad-CAM+ Heatmap\n{cam_title}", fontsize=12, fontweight="bold", color="#667eea")
 axes[1].axis("off")
 
+# Overlay with contours
+axes[2].imshow(overlay)
+axes[2].contour(heatmap, levels=[0.35, 0.55, 0.75], linewidths=1.0, colors="white", alpha=0.8)
+axes[2].set_title("Overlay + Contours", fontsize=12, fontweight="bold", color="#667eea")
+axes[2].axis("off")
+
+plt.tight_layout(pad=2.0)
+st.pyplot(fig)
+
 # Probabilities bar chart
+fig2, ax = plt.subplots(figsize=(10, 4), facecolor="white")
 colors = ["#667eea" if i == pred_idx else "#cbd5e1" for i in range(len(CLASS_NAMES))]
-axes[2].barh(CLASS_NAMES, probs, color=colors, edgecolor="white", linewidth=1.5)
-axes[2].set_xlim(0, 1)
-axes[2].set_xlabel("Probability", fontsize=11, fontweight="bold")
-axes[2].set_title("Class Probabilities", fontsize=12, fontweight="bold", color="#667eea")
-axes[2].grid(axis="x", alpha=0.2, linestyle="--")
+ax.barh(CLASS_NAMES, probs, color=colors, edgecolor="white", linewidth=1.5)
+ax.set_xlim(0, 1)
+ax.set_xlabel("Probability", fontsize=11, fontweight="bold")
+ax.set_title("Class Probabilities", fontsize=12, fontweight="bold", color="#667eea")
+ax.grid(axis="x", alpha=0.2, linestyle="--")
 
 for i, cls in enumerate(CLASS_NAMES):
-    axes[2].text(
+    ax.text(
         probs[i] + 0.018,
         i,
         f"{probs[i]:.1%}",
@@ -601,20 +612,33 @@ for i, cls in enumerate(CLASS_NAMES):
         color="#667eea" if i == pred_idx else "#0b1220"
     )
 
-plt.tight_layout(pad=2.0)
-st.pyplot(fig)
+plt.tight_layout()
+st.pyplot(fig2)
 
-# Download button
-buf = io.BytesIO()
-fig.savefig(buf, format="png", bbox_inches="tight", dpi=180, facecolor="white")
-buf.seek(0)
+# Download buttons
+buf1 = io.BytesIO()
+fig.savefig(buf1, format="png", bbox_inches="tight", dpi=180, facecolor="white")
+buf1.seek(0)
 
-st.download_button(
-    "💾 Save result image",
-    data=buf,
-    file_name=f"result_{pred_class}.png",
-    mime="image/png"
-)
+buf2 = io.BytesIO()
+fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=180, facecolor="white")
+buf2.seek(0)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.download_button(
+        "💾 Save Grad-CAM visualization",
+        data=buf1,
+        file_name=f"gradcam_{pred_class}.png",
+        mime="image/png"
+    )
+with col2:
+    st.download_button(
+        "💾 Save probability chart",
+        data=buf2,
+        file_name=f"probabilities_{pred_class}.png",
+        mime="image/png"
+    )
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -624,7 +648,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.markdown(
     """
     <div style="text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eef0f6; color: #5b6475; font-size: 0.9rem;">
-      <b>FCI-ResNetV2 Alzheimer Detection System</b> | Clinical MRI Analysis | Powered by TensorFlow & Streamlit
+      <b>FCI-ResNetV2 Alzheimer Detection System</b> | Advanced Grad-CAM+ with Brain Tissue Masking | Powered by TensorFlow & Streamlit
     </div>
     """,
     unsafe_allow_html=True
