@@ -74,9 +74,6 @@ def load_single_model(model_name):
 
     model = tf.keras.models.load_model(local_path, compile=False)
 
-    st.write("Inputs:", model.inputs)
-    st.write("Outputs:", model.outputs)
-
     return model
 
 @st.cache_resource(show_spinner=False)
@@ -428,7 +425,7 @@ st.sidebar.markdown("## ⚙️ Controls")
 
 mode = st.sidebar.radio(
     "Select mode",
-    ["🔬 Single Model", "🧠 Ensemble All 3"],
+    ["🔬 Single Model", "🧠 FCI Ensemble"],
     index=1
 )
 
@@ -490,9 +487,8 @@ st.markdown(
     <span class="pill">ResNet50V2</span>
     <span class="pill">ResNet101V2</span>
     <span class="pill">ResNet152V2</span>
-    <span class="pill">Ensemble Mode</span>
+    <span class="pill">FCI Ensemble</span>
     <span class="pill">Grad-CAM+</span>
-    <span class="pill">Brain Masking</span>
   </div>
 </div>
 """,
@@ -508,7 +504,7 @@ if not run_button:
 <div class="card" style="margin-top: 1.5rem;">
   <div class="card-title">✨ How to Use</div>
   <div class="small">
-    1) Pick <b>Ensemble All 3</b> (recommended) or a single ResNetV2 model<br/>
+    1) Pick <b>FCI Ensemble</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
     3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
     <b style="color: #667eea;">💡 Features:</b> Brain tissue masking • Adaptive smoothing • Percentile normalization • Contrast enhancement
@@ -531,10 +527,10 @@ orig_img_arr = np.array(orig_img).astype("float32") / 255.0
 
 try:
     with st.spinner("🔄 Running prediction…"):
-        if mode == "🧠 Ensemble All 3":
+        if mode == "🧠 FCI Ensemble":
             models_dict = load_all_models()
             pred_idx, probs, chosen_key, grad_model = ensemble_predict_simple(models_dict, batch)
-            cam_title = "Ensemble All 3"
+            cam_title = "FCI Ensemble"
             mode_label = "Ensemble Mode"
         else:
             grad_model = load_single_model(selected_model)
