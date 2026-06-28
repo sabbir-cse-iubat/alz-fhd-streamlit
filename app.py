@@ -32,9 +32,9 @@ H5_RESNET101V2_ID = "11UB7-lHDqcAuPNnA_q8wAQrgS2CijHV6"
 H5_RESNET152V2_ID = "1Rg0d2efE-oV_usoJkr6F2xXLCRW9yPTi"
 
 MODEL_FILES = {
-    "ResNet50V2": ("az_model_resnet50v2.h5", H5_RESNET50V2_ID),
-    "ResNet101V2": ("az_model_resnet101v2.h5", H5_RESNET101V2_ID),
-    "ResNet152V2": ("az_model_resnet152v2.h5", H5_RESNET152V2_ID),
+    "ResNet50V2": ("resnet50v2.keras", H5_RESNET50V2_ID),
+    "ResNet101V2": ("resnet101v2.keras", H5_RESNET101V2_ID),
+    "ResNet152V2": ("resnet152v2.keras", H5_RESNET152V2_ID),
 }
 
 def gdrive_direct_url(file_id: str) -> str:
@@ -50,74 +50,53 @@ def _is_probably_html(path: str) -> bool:
 
 def _validate_download(path: str):
     if not os.path.exists(path):
-        raise FileNotFoundError(f"File missing after download: {path}")
+        raise FileNotFoundError(path)
+
     size = os.path.getsize(path)
-    if size < 50_000 or _is_probably_html(path):
+
+    if size < 50000:
         raise RuntimeError(
-            "Downloaded file is not a valid .h5.\n\n"
-            "Fix:\n"
-            "1) Google Drive -> Share -> Anyone with the link (Viewer)\n"
-            "2) Verify FILE IDs are correct"
+            "Downloaded model looks invalid. "
+            "Check Google Drive sharing and File ID."
         )
 
 def _download_if_needed(file_id: str, filename: str) -> str:
-    if not file_id or "PASTE_" in file_id:
-        raise RuntimeError("Model IDs are not set. Check Google Drive FILE IDs.")
 
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
 
     if os.path.exists(local_path):
-        try:
-            _validate_download(local_path)
-            return local_path
-        except Exception:
-            try:
-                os.remove(local_path)
-            except Exception:
-                pass
+        return local_path
 
-    url = gdrive_direct_url(file_id)
-    gdown.download(url, local_path, quiet=True)
+    url = f"https://drive.google.com/uc?id={file_id}"
+
+    gdown.download(
+        url=url,
+        output=local_path,
+        quiet=False
+    )
+
     _validate_download(local_path)
+
     return local_path
 
 # ============================================================
 # 1. BUILD MODELS
 # ============================================================
-def _build_head(backbone):
-    return tf.keras.Sequential([
-        backbone,
-        tf.keras.layers.GlobalAveragePooling2D(),
-        tf.keras.layers.Dense(256, activation="relu"),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.Dropout(0.4),
-        tf.keras.layers.Dense(256, activation="relu"),
-        tf.keras.layers.Dense(NUM_CLASSES, activation="softmax"),
-    ])
-
-def build_model_by_name(model_name: str):
-    if model_name == "ResNet50V2":
-        base = tf.keras.applications.ResNet50V2(include_top=False, weights=None, input_shape=(224, 224, 3))
-        return _build_head(base)
-    if model_name == "ResNet101V2":
-        base = tf.keras.applications.ResNet101V2(include_top=False, weights=None, input_shape=(224, 224, 3))
-        return _build_head(base)
-    if model_name == "ResNet152V2":
-        base = tf.keras.applications.ResNet152V2(include_top=False, weights=None, input_shape=(224, 224, 3))
-        return _build_head(base)
-    raise ValueError(f"Unknown model_name: {model_name}")
-
-def load_model_weights_safe(model_name: str, h5_path: str):
-    model = build_model_by_name(model_name)
-    _ = model(tf.zeros((1, 224, 224, 3), dtype=tf.float32), training=False)
-    model.load_weights(h5_path)
-    return model
-
 @st.cache_resource(show_spinner=False)
-def load_single_model(model_name: str):
-    fname, file_id = MODEL_FILES[model_name]
-    local_path = _download_if_needed(file_id, fname)
-    return load_model_weights_safe(model_name, local_path)
+@st.cache_resource(show_spinner=False)
+def load_single_model(model_name):
+
+    filename, file_id = MODEL_FILES[model_name]
+
+    local_path = _download_if_needed(
+        file_id,
+        filename
+    )
+
+    return tf.keras.models.load_model(
+        local_path,
+        compile=False
+    )
 
 @st.cache_resource(show_spinner=False)
 def load_all_models():
