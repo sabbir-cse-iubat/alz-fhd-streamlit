@@ -481,7 +481,7 @@ st.markdown(
   <h1>🧠 FCI-ResNetV2 Alzheimer MRI</h1>
   <p>
     Advanced CNN ensemble with <b>ResNet50V2, ResNet101V2, ResNet152V2</b> and 
-    <b>Grad-CAM+ with brain tissue masking</b> for clinical MRI analysis. 
+    <b>Grad-CAM+ </b> for clinical MRI analysis. 
   </p>
   <div class="pills">
     <span class="pill">ResNet50V2</span>
@@ -507,7 +507,6 @@ if not run_button:
     1) Pick <b>FCI Ensemble</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
     3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
-    <b style="color: #667eea;">💡 Features:</b> Brain tissue masking • Adaptive smoothing • Percentile normalization • Contrast enhancement
   </div>
 </div>
 """,
@@ -543,7 +542,7 @@ try:
     pred_class = CLASS_NAMES[pred_idx]
     confidence = float(np.max(probs))
 
-    with st.spinner("🎨 Computing advanced Grad-CAM with brain masking…"):
+    with st.spinner("🎨 Computing advanced Grad-CAM…"):
         heatmap = make_gradcam_heatmap_with_focus(
             grad_model, batch, orig_img_arr, 
             class_index=pred_idx,
@@ -660,7 +659,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.markdown(
     """
     <div style="text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eef0f6; color: #5b6475; font-size: 0.9rem;">
-      <b>FCI-ResNetV2 Alzheimer Detection System</b> | Advanced Grad-CAM+ with Brain Tissue Masking | Powered by TensorFlow & Streamlit
+      <b>FCI-ResNetV2 Alzheimer Detection System</b> | Advanced Grad-CAM+ | Powered by TensorFlow & Streamlit
     </div>
     """,
     unsafe_allow_html=True
