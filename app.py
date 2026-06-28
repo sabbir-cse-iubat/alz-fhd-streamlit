@@ -181,7 +181,6 @@ def find_last_conv2d_layer_name(model):
             return layer.name
     raise ValueError("No Conv2D-like layer found for this model.")
 
-@tf.function
 def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
     """Compute Grad-CAM heatmap."""
     grad_model = tf.keras.models.Model(
@@ -192,10 +191,17 @@ def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
     ],
 )
     with tf.GradientTape() as tape:
-        conv_out, preds = grad_model(img_tensor, training=False)
+        outputs = grad_model(img_tensor, training=False)
 
+        st.write(type(outputs))
+        st.write(outputs)
+        
+        conv_out = outputs[0]
+        preds = outputs[1]
+        
         st.write(type(preds))
-        st.write(preds)
+        st.write(preds.shape if hasattr(preds, "shape") else "No shape")
+        
         st.stop()
         preds = tf.convert_to_tensor(preds)
         conv_out = tf.convert_to_tensor(conv_out)
