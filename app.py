@@ -179,9 +179,12 @@ def find_last_conv2d_layer_name(model):
 def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
     """Compute Grad-CAM heatmap."""
     grad_model = tf.keras.models.Model(
-        inputs=[model.inputs],
-        outputs=[model.get_layer(target_layer_name).output, model.output]
-    )
+    inputs=model.input,
+    outputs=[
+        model.get_layer(target_layer_name).output,
+        model.output,
+    ],
+)
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(img_tensor, training=False)
         y = preds[:, class_index]
