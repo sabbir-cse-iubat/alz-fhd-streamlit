@@ -182,41 +182,36 @@ def find_last_conv2d_layer_name(model):
     raise ValueError("No Conv2D-like layer found for this model.")
 
 def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
-    """Compute Grad-CAM heatmap."""
-    grad_model = tf.keras.models.Model(
-    inputs=model.input,
-    outputs=[
-        model.get_layer(target_layer_name).output,
-        model.output,
-    ],
-)
+
+    grad_model = tf.keras.Model(
+        inputs=model.inputs,
+        outputs=[
+            model.get_layer(target_layer_name).output,
+            model.outputs[0],
+        ],
+    )
+
     with tf.GradientTape() as tape:
-        outputs = grad_model(img_tensor, training=False)
 
-        st.write(type(outputs))
-        st.write(outputs)
-        
-        conv_out = outputs[0]
-        preds = outputs[1]
-        
-        st.write(type(preds))
-        st.write(preds.shape if hasattr(preds, "shape") else "No shape")
-        
-        st.stop()
-        preds = tf.convert_to_tensor(preds)
-        conv_out = tf.convert_to_tensor(conv_out)
-        y = preds[:, class_index]
-    grads = tape.gradient(y, conv_out)
+        conv_outputs, predictions = grad_model(img_tensor, training=False)
+
+        loss = predictions[:, class_index]
+
+    grads = tape.gradient(loss, conv_outputs)
+
     pooled_grads = tf.reduce_mean(grads, axis=(1, 2))
-    conv_out = conv_out[0]
-    pooled_grads = pooled_grads[0]
-    cam = tf.reduce_sum(conv_out * pooled_grads, axis=-1)
-    cam = tf.nn.relu(cam)
-    cam = cam - tf.reduce_min(cam)
-    if tf.reduce_max(cam) > 0:
-        cam = cam / (tf.reduce_max(cam) + 1e-8)
-    return cam
 
+    conv_outputs = conv_outputs[0]
+    pooled_grads = pooled_grads[0]
+
+    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+
+    heatmap = tf.nn.relu(heatmap)
+
+    heatmap /= (tf.reduce_max(heatmap) + 1e-8)
+
+    return heatmap
+    
 def make_gradcam_heatmap_with_focus(model, img_array, orig_img_rgb01, class_index=None, 
                                      sigma=2.0, thr_pct=80, power=0.9):
     """Compute Grad-CAM with tissue masking and processing."""
