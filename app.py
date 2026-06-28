@@ -498,7 +498,8 @@ st.markdown(
 # ============================================================
 # Pre-run info card
 # ============================================================
-if not run_button:
+
+if not run_button and not st.session_state.prediction_done:
     st.markdown(
         """
 <div class="card" style="margin-top: 1.5rem;">
@@ -506,152 +507,229 @@ if not run_button:
   <div class="small">
     1) Pick <b>FCI Ensemble</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
-    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
+    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap
   </div>
 </div>
 """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.stop()
 
 if chosen_file is None:
     st.error("❌ Please upload or select an image first.")
     st.stop()
-
 # ============================================================
 # 9. INFERENCE + ADVANCED GRADCAM
 # ============================================================
 orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 orig_img_arr = np.array(orig_img).astype("float32") / 255.0
 
-try:
-    with st.spinner("🔄 Running prediction…"):
-        if mode == "🧠 FCI Ensemble":
-            models_dict = load_all_models()
-            pred_idx, probs, chosen_key, grad_model = ensemble_predict_simple(models_dict, batch)
-            cam_title = "FCI Ensemble"
-            mode_label = "Ensemble Mode"
-        else:
-            grad_model = load_single_model(selected_model)
-            probs = grad_model.predict(batch, verbose=0)[0].astype(np.float32)
-            pred_idx = int(np.argmax(probs))
-            chosen_key = selected_model
-            cam_title = selected_model
-            mode_label = "Single Model"
+if run_button:
 
-    pred_class = CLASS_NAMES[pred_idx]
-    confidence = float(np.max(probs))
+    try:
+        with st.spinner("🔄 Running prediction..."):
 
-    with st.spinner("🎨 Computing advanced Grad-CAM…"):
-        heatmap = make_gradcam_heatmap_with_focus(
-            grad_model, batch, orig_img_arr, 
-            class_index=pred_idx,
-            sigma=2.0, thr_pct=80, power=0.9
-        )
-        overlay = overlay_with_alpha(orig_img_arr, heatmap, alpha=0.45, cmap="jet")
+            if mode == "🧠 FCI Ensemble":
+                models_dict = load_all_models()
+                pred_idx, probs, chosen_key, grad_model = ensemble_predict_simple(
+                    models_dict, batch
+                )
 
-except Exception as e:
-    st.error(f"❌ Error: {str(e)}")
+                cam_title = "FCI Ensemble"
+                mode_label = "FCI Ensemble"
+
+            else:
+                grad_model = load_single_model(selected_model)
+
+                probs = grad_model.predict(batch, verbose=0)[0].astype(np.float32)
+
+                pred_idx = int(np.argmax(probs))
+
+                cam_title = selected_model
+                mode_label = "Single Model"
+
+            pred_class = CLASS_NAMES[pred_idx]
+            confidence = float(np.max(probs))
+
+        with st.spinner("🎨 Computing advanced Grad-CAM..."):
+
+            heatmap = make_gradcam_heatmap_with_focus(
+                grad_model,
+                batch,
+                orig_img_arr,
+                class_index=pred_idx,
+                sigma=2.0,
+                thr_pct=80,
+                power=0.9,
+            )
+
+            overlay = overlay_with_alpha(
+                orig_img_arr,
+                heatmap,
+                alpha=0.45,
+                cmap="jet",
+            )
+
+        # Save everything
+        st.session_state.prediction_done = True
+        st.session_state.pred_class = pred_class
+        st.session_state.confidence = confidence
+        st.session_state.mode_label = mode_label
+        st.session_state.cam_title = cam_title
+        st.session_state.pred_idx = pred_idx
+        st.session_state.probs = probs
+        st.session_state.heatmap = heatmap
+        st.session_state.overlay = overlay
+        st.session_state.orig_img_arr = orig_img_arr
+
+    except Exception as e:
+        st.error(f"❌ Error: {e}")
+        st.stop()
+
+# ============================================================
+# SHOW LAST RESULT
+# ============================================================
+if not st.session_state.prediction_done:
     st.stop()
+
+pred_class = st.session_state.pred_class
+confidence = st.session_state.confidence
+mode_label = st.session_state.mode_label
+cam_title = st.session_state.cam_title
+pred_idx = st.session_state.pred_idx
+probs = st.session_state.probs
+heatmap = st.session_state.heatmap
+overlay = st.session_state.overlay
+orig_img_arr = st.session_state.orig_img_arr
 
 # ============================================================
 # 10. OUTPUT SECTION
 # ============================================================
 st.markdown(
     f"""
-    <div class="card" style="margin-top: 1.5rem;">
-      <div class="card-title">📊 Prediction Output</div>
-      <div class="chips">
-        <span class="chip"><b>🔬 Mode:</b> {mode_label}</span>
-        <span class="chip"><b>📄 Model:</b> {cam_title}</span>
-        <span class="chip"><b>✅ Prediction:</b> {pred_class}</span>
-        <span class="chip"><b>📈 Confidence:</b> {confidence:.1%}</span>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True
+<div class="card" style="margin-top:1.5rem;">
+<div class="card-title">📊 Prediction Output</div>
+
+<div class="chips">
+<span class="chip"><b>🔬 Mode:</b> {mode_label}</span>
+<span class="chip"><b>📄 Model:</b> {cam_title}</span>
+<span class="chip"><b>✅ Prediction:</b> {pred_class}</span>
+<span class="chip"><b>📈 Confidence:</b> {confidence:.1%}</span>
+</div>
+
+</div>
+""",
+    unsafe_allow_html=True,
 )
 
 # ============================================================
 # VISUALIZATION
 # ============================================================
-st.markdown('<div class="card" style="margin-top: 1.3rem;">', unsafe_allow_html=True)
+st.markdown('<div class="card" style="margin-top:1.3rem;">', unsafe_allow_html=True)
 
 fig, axes = plt.subplots(
-    1, 3,
+    1,
+    3,
     figsize=(14, 4.8),
     gridspec_kw={"width_ratios": [1, 1, 0.95]},
-    facecolor="white"
+    facecolor="white",
 )
 
-# Original
 axes[0].imshow(orig_img_arr)
-axes[0].set_title(f"Original MRI\n{pred_class}", fontsize=12, fontweight="bold", color="#667eea")
+axes[0].set_title(
+    f"Original MRI\n{pred_class}",
+    fontsize=12,
+    fontweight="bold",
+    color="#667eea",
+)
 axes[0].axis("off")
 
-# Grad-CAM heatmap
 axes[1].imshow(heatmap, cmap="jet", vmin=0, vmax=1)
-axes[1].set_title(f"Grad-CAM+ Heatmap\n{cam_title}", fontsize=12, fontweight="bold", color="#667eea")
+axes[1].set_title(
+    f"Grad-CAM+ Heatmap\n{cam_title}",
+    fontsize=12,
+    fontweight="bold",
+    color="#667eea",
+)
 axes[1].axis("off")
 
-# Overlay with contours
 axes[2].imshow(overlay)
-axes[2].contour(heatmap, levels=[0.35, 0.55, 0.75], linewidths=1.0, colors="white", alpha=0.8)
-axes[2].set_title("Overlay + Contours", fontsize=12, fontweight="bold", color="#667eea")
+axes[2].contour(
+    heatmap,
+    levels=[0.35, 0.55, 0.75],
+    linewidths=1,
+    colors="white",
+)
+axes[2].set_title(
+    "Overlay + Contours",
+    fontsize=12,
+    fontweight="bold",
+    color="#667eea",
+)
 axes[2].axis("off")
 
-plt.tight_layout(pad=2.0)
+plt.tight_layout()
 st.pyplot(fig)
 
-# Probabilities bar chart
-fig2, ax = plt.subplots(figsize=(10, 4), facecolor="white")
-colors = ["#667eea" if i == pred_idx else "#cbd5e1" for i in range(len(CLASS_NAMES))]
-ax.barh(CLASS_NAMES, probs, color=colors, edgecolor="white", linewidth=1.5)
-ax.set_xlim(0, 1)
-ax.set_xlabel("Probability", fontsize=11, fontweight="bold")
-ax.set_title("Class Probabilities", fontsize=12, fontweight="bold", color="#667eea")
-ax.grid(axis="x", alpha=0.2, linestyle="--")
+# ============================================================
+# Probability Chart
+# ============================================================
+fig2, ax = plt.subplots(figsize=(10, 4))
 
-for i, cls in enumerate(CLASS_NAMES):
+colors = [
+    "#667eea" if i == pred_idx else "#cbd5e1"
+    for i in range(len(CLASS_NAMES))
+]
+
+ax.barh(CLASS_NAMES, probs, color=colors)
+
+ax.set_xlim(0, 1)
+ax.set_xlabel("Probability")
+ax.set_title("Class Probabilities")
+
+for i in range(len(CLASS_NAMES)):
     ax.text(
-        probs[i] + 0.018,
+        probs[i] + 0.015,
         i,
         f"{probs[i]:.1%}",
         va="center",
         fontsize=10,
         fontweight="bold",
-        color="#667eea" if i == pred_idx else "#0b1220"
     )
 
 plt.tight_layout()
+
 st.pyplot(fig2)
 
-# Download buttons
+# ============================================================
+# DOWNLOAD
+# ============================================================
 buf1 = io.BytesIO()
-fig.savefig(buf1, format="png", bbox_inches="tight", dpi=180, facecolor="white")
+fig.savefig(buf1, format="png", dpi=180, bbox_inches="tight")
 buf1.seek(0)
 
 buf2 = io.BytesIO()
-fig2.savefig(buf2, format="png", bbox_inches="tight", dpi=180, facecolor="white")
+fig2.savefig(buf2, format="png", dpi=180, bbox_inches="tight")
 buf2.seek(0)
 
 col1, col2 = st.columns(2)
+
 with col1:
     st.download_button(
-        label="💾 Save Grad-CAM visualization",
+        "💾 Save Grad-CAM visualization",
         data=buf1.getvalue(),
         file_name=f"gradcam_{pred_class}.png",
         mime="image/png",
-        key="download_gradcam"
+        key="gradcam_download",
     )
 
 with col2:
     st.download_button(
-        label="💾 Save probability chart",
+        "💾 Save probability chart",
         data=buf2.getvalue(),
         file_name=f"probabilities_{pred_class}.png",
         mime="image/png",
-        key="download_probs"
+        key="probability_download",
     )
 
 st.markdown("</div>", unsafe_allow_html=True)
