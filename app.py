@@ -123,35 +123,47 @@ def load_image_from_file(file, img_size=IMG_SIZE):
 # 3. GRAD-CAM HELPERS
 # ============================================================
 def get_last_conv_layer_name(model):
-    conv_layer_names = []
+    conv_layers = []
 
     for layer in model.layers:
         try:
             out = layer.output
-            if len(out.shape) == 4:
-                conv_layer_names.append(layer.name)
+            shape = out.shape
+
+            if len(shape) == 4:
+                conv_layers.append(layer.name)
+
         except Exception:
             continue
 
-    if not conv_layer_names:
+    if not conv_layers:
         raise ValueError("No convolution layer found.")
 
-    return conv_layer_names[-1]
+    return conv_layers[-1]
 
 def make_gradcam_heatmap(model, img_array, class_index=None):
 
     last_conv_name = get_last_conv_layer_name(model)
 
-    last_conv_layer = model.get_layer(last_conv_name)
-
-    grad_model = tf.keras.models.Model(
+    grad_model = tf.keras.Model(
         inputs=model.inputs,
-        outputs=[last_conv_layer.output, model.output]
+        outputs=[
+            model.get_layer(last_conv_name).output,
+            model.output
+        ]
     )
 
     with tf.GradientTape() as tape:
 
-        conv_outputs, predictions = grad_model(img_array)
+        conv_outputs, predictions = grad_model(img_array, training=False)
+
+        if isinstance(conv_outputs, (list, tuple)):
+            conv_outputs = conv_outputs[0]
+
+        if isinstance(predictions, (list, tuple)):
+            predictions = predictions[0]
+
+        predictions = tf.convert_to_tensor(predictions)
 
         if class_index is None:
             class_index = tf.argmax(predictions[0])
@@ -162,20 +174,22 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
 
     pooled_grads = tf.reduce_mean(
         grads,
-        axis=(0,1,2)
+        axis=(0, 1, 2)
     )
 
     conv_outputs = conv_outputs[0]
 
-    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
-
-    heatmap = tf.squeeze(heatmap)
-
-    heatmap = tf.maximum(heatmap,0)
-
-    heatmap /= (
-        tf.reduce_max(heatmap)+1e-8
+    heatmap = tf.reduce_sum(
+        conv_outputs * pooled_grads,
+        axis=-1
     )
+
+    heatmap = tf.maximum(heatmap, 0)
+
+    max_val = tf.reduce_max(heatmap)
+
+    if max_val > 0:
+        heatmap = heatmap / max_val
 
     return heatmap.numpy()
 
@@ -186,33 +200,30 @@ def overlay_heatmap_on_image(
 ):
 
     import cv2
-    import matplotlib.cm as cm
 
-    img = np.asarray(
-        pil_image
-    ).astype(np.float32)/255.0
+    img = np.asarray(pil_image).astype(np.float32) / 255.0
 
-    h,w = img.shape[:2]
+    h, w = img.shape[:2]
 
-    heatmap = cv2.resize(
+    heatmap = cv2.resize(heatmap, (w, h))
+
+    heatmap = np.uint8(255 * heatmap)
+
+    heatmap = cv2.applyColorMap(
         heatmap,
-        (w,h)
+        cv2.COLORMAP_JET
     )
 
-    cmap = cm.get_cmap("jet")
-
-    heatmap_rgb = cmap(
-        heatmap
-    )[:,:,:3]
-
-    overlay = np.clip(
-        heatmap_rgb*alpha +
-        img*(1-alpha),
-        0,
-        1
+    heatmap = cv2.cvtColor(
+        heatmap,
+        cv2.COLOR_BGR2RGB
     )
 
-    return overlay
+    heatmap = heatmap.astype(np.float32) / 255.0
+
+    overlay = alpha * heatmap + (1 - alpha) * img
+
+    return np.clip(overlay, 0, 1)
 
 # ============================================================
 # 4. ENSEMBLE HELPERS (Auto-combine all 3 models equally)
