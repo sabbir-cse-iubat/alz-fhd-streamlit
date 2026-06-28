@@ -71,7 +71,13 @@ def _download_if_needed(file_id: str, filename: str) -> str:
 def load_single_model(model_name):
     filename, file_id = MODEL_FILES[model_name]
     local_path = _download_if_needed(file_id, filename)
-    return tf.keras.models.load_model(local_path, compile=False)
+
+    model = tf.keras.models.load_model(local_path, compile=False)
+
+    st.write("Inputs:", model.inputs)
+    st.write("Outputs:", model.outputs)
+
+    return model
 
 @st.cache_resource(show_spinner=False)
 def load_all_models():
