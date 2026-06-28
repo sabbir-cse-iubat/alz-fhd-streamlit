@@ -4,4 +4,4 @@ numpy
 pillow
 matplotlib
 opencv-python-headless
-gdown
+gdown>=5.2.0
