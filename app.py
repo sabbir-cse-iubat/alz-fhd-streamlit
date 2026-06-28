@@ -438,7 +438,6 @@ st.markdown(
   <p>
     Advanced CNN ensemble with <b>ResNet50V2, ResNet101V2, ResNet152V2</b> and 
     <b>Grad-CAM visualization</b> for clinical brain MRI analysis. 
-    Models auto-download from Google Drive.
   </p>
   <div class="pills">
     <span class="pill">ResNet50V2</span>
