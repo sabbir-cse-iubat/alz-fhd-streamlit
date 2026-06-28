@@ -467,7 +467,6 @@ st.markdown(
     <span class="pill">ResNet152V2</span>
     <span class="pill">Ensemble Mode</span>
     <span class="pill">Grad-CAM</span>
-    <span class="pill">Google Drive</span>
   </div>
 </div>
 """,
