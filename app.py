@@ -641,14 +641,16 @@ with col1:
         "💾 Save Grad-CAM visualization",
         data=buf1,
         file_name=f"gradcam_{pred_class}.png",
-        mime="image/png"
+        mime="image/png",
+        on_click="ignore"
     )
 with col2:
     st.download_button(
         "💾 Save probability chart",
         data=buf2,
         file_name=f"probabilities_{pred_class}.png",
-        mime="image/png"
+        mime="image/png",
+        on_click="ignore"
     )
 
 st.markdown("</div>", unsafe_allow_html=True)
