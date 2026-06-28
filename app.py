@@ -499,7 +499,7 @@ st.markdown(
 # Pre-run info card
 # ============================================================
 
-if not run_button and not st.session_state.prediction_done:
+if not run_button:
     st.markdown(
         """
 <div class="card" style="margin-top: 1.5rem;">
@@ -507,17 +507,18 @@ if not run_button and not st.session_state.prediction_done:
   <div class="small">
     1) Pick <b>FCI Ensemble</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
-    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap
+    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
   </div>
 </div>
 """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
     st.stop()
 
 if chosen_file is None:
     st.error("❌ Please upload or select an image first.")
     st.stop()
+
 # ============================================================
 # 9. INFERENCE + ADVANCED GRADCAM
 # ============================================================
