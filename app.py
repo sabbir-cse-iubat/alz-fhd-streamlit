@@ -1,10 +1,13 @@
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 import io
 import numpy as np
 from PIL import Image
 import streamlit as st
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import gdown
 
 from itertools import combinations
 from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
@@ -13,97 +16,124 @@ from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
 # 0. BASIC SETUP
 # ---------------------------------------------------------------------
 st.set_page_config(
-    page_title="FCI-HybridNet Alzheimer MRI",
+    page_title="FCI-ResNet Alzheimer MRI",
     layout="wide"
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-SAMPLE_DIR = os.path.join(BASE_DIR, "sample_images")
-os.makedirs(SAMPLE_DIR, exist_ok=True)
-
-# IMPORTANT: your folder is "Models"
-MODEL_DIR = os.path.join(BASE_DIR, "Models")
-
 IMG_SIZE = (224, 224)
-
 CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
+NUM_CLASSES = len(CLASS_NAMES)
 
-# ---------------------------------------------------------------------
-# 1) DISCOVER LOCAL MODELS (AUTO)
-# ---------------------------------------------------------------------
-def infer_family(model_filename: str) -> str:
-    name = model_filename.lower()
-    if name.startswith("densenet"):
-        return "DenseNet"
-    if name.startswith("mobilenet"):
-        return "MobileNet"
-    if name.startswith("resnet"):
-        return "ResNet"
-    return "Other"
+MODEL_CACHE_DIR = "models_cache"
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
+# Google Drive IDs (.h5)
+H5_RESNET50_ID = "1H7iUcI94ul01BWqtGwf-LZ2jKnATf17l"
+H5_RESNET101_ID = "11UB7-lHDqcAuPNnA_q8wAQrgS2CijHV6"
+H5_RESNET152_ID = "1Rg0d2efE-oV_usoJkr6F2xXLCRW9yPTi"
 
-def discover_models(model_dir: str):
-    """
-    Returns:
-      models_map: dict display_name -> full_path
-      meta_map: dict display_name -> {file, family}
-    """
-    if not os.path.exists(model_dir):
-        return {}, {}
+MODEL_FILES = {
+    "ResNet50": ("az_model_resnet50.h5", H5_RESNET50_ID),
+    "ResNet101": ("az_model_resnet101.h5", H5_RESNET101_ID),
+    "ResNet152": ("az_model_resnet152.h5", H5_RESNET152_ID),
+}
 
-    files = sorted([f for f in os.listdir(model_dir) if f.lower().endswith(".keras")])
+def gdrive_direct_url(file_id: str) -> str:
+    return f"https://drive.google.com/uc?id={file_id}"
 
-    models_map = {}
-    meta_map = {}
-    for f in files:
-        display = f.replace(".keras", "")
-        path = os.path.join(model_dir, f)
-        fam = infer_family(f)
-        models_map[display] = path
-        meta_map[display] = {"file": f, "family": fam}
-    return models_map, meta_map
+def _is_probably_html(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096).lower()
+        return (b"<html" in head) or (b"<!doctype html" in head) or (b"google drive" in head)
+    except Exception:
+        return False
 
-
-MODELS_MAP, MODELS_META = discover_models(MODEL_DIR)
-
-if not MODELS_MAP:
-    st.error(
-        f"No .keras models found in: {MODEL_DIR}\n\n"
-        "Fix: Create a folder named 'Models' next to app.py and put your .keras files there."
-    )
-    st.stop()
-
-ALL_MODEL_NAMES = list(MODELS_MAP.keys())
-
-# ---------------------------------------------------------------------
-# 2) LOAD MODEL (LOCAL)
-# ---------------------------------------------------------------------
-@st.cache_resource(show_spinner=False)
-def load_model_by_name(display_name: str):
-    if display_name not in MODELS_MAP:
-        raise ValueError(f"Model not found: {display_name}")
-    path = MODELS_MAP[display_name]
+def _validate_download(path: str):
     if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    model = tf.keras.models.load_model(path, compile=False)
+        raise FileNotFoundError(f"File missing after download: {path}")
+    size = os.path.getsize(path)
+    if size < 50_000 or _is_probably_html(path):
+        raise RuntimeError(
+            "Downloaded file is not a valid .h5.\n\n"
+            "Fix:\n"
+            "1) Google Drive -> Share -> Anyone with the link (Viewer)\n"
+            "2) Verify FILE IDs are correct\n"
+            f"Bad file: {path} ({size} bytes)"
+        )
+
+def _download_if_needed(file_id: str, filename: str) -> str:
+    if not file_id or "PASTE_" in file_id:
+        raise RuntimeError(
+            "Model IDs are not set.\n"
+            "Open app.py and set correct Google Drive FILE IDs."
+        )
+
+    local_path = os.path.join(MODEL_CACHE_DIR, filename)
+
+    if os.path.exists(local_path):
+        try:
+            _validate_download(local_path)
+            return local_path
+        except Exception:
+            try:
+                os.remove(local_path)
+            except Exception:
+                pass
+
+    url = gdrive_direct_url(file_id)
+    gdown.download(url, local_path, quiet=True, fuzzy=True)
+    _validate_download(local_path)
+    return local_path
+
+# ---------------------------------------------------------------------
+# 1) BUILD MODELS (matching training architecture)
+# ---------------------------------------------------------------------
+def _build_head(backbone):
+    return tf.keras.Sequential([
+        backbone,
+        tf.keras.layers.GlobalAveragePooling2D(),
+        tf.keras.layers.Dense(256, activation="relu"),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(0.4),
+        tf.keras.layers.Dense(256, activation="relu"),
+        tf.keras.layers.Dense(NUM_CLASSES, activation="softmax"),
+    ])
+
+def build_model_by_name(model_name: str):
+    if model_name == "ResNet50":
+        base = tf.keras.applications.ResNet50(include_top=False, weights=None, input_shape=(224, 224, 3))
+        return _build_head(base)
+    if model_name == "ResNet101":
+        base = tf.keras.applications.ResNet101(include_top=False, weights=None, input_shape=(224, 224, 3))
+        return _build_head(base)
+    if model_name == "ResNet152":
+        base = tf.keras.applications.ResNet152(include_top=False, weights=None, input_shape=(224, 224, 3))
+        return _build_head(base)
+    raise ValueError(f"Unknown model_name: {model_name}")
+
+def load_model_weights_safe(model_name: str, h5_path: str):
+    model = build_model_by_name(model_name)
+    _ = model(tf.zeros((1, 224, 224, 3), dtype=tf.float32), training=False)
+    model.load_weights(h5_path)
     return model
 
+@st.cache_resource(show_spinner=False)
+def load_single_model(model_name: str):
+    fname, file_id = MODEL_FILES[model_name]
+    local_path = _download_if_needed(file_id, fname)
+    return load_model_weights_safe(model_name, local_path)
 
 @st.cache_resource(show_spinner=False)
 def load_models_batch(selected_names: tuple):
-    """
-    Load multiple models once.
-    selected_names: tuple[str]
-    """
+    """Load multiple models once."""
     loaded = {}
     for name in selected_names:
-        loaded[name] = load_model_by_name(name)
+        loaded[name] = load_single_model(name)
     return loaded
 
-
 # ---------------------------------------------------------------------
-# 3. IMAGE HELPERS
+# 2) IMAGE HELPERS
 # ---------------------------------------------------------------------
 def load_image_from_file(file, img_size=IMG_SIZE):
     """Load PIL image from uploaded file or path and resize."""
@@ -116,9 +146,8 @@ def load_image_from_file(file, img_size=IMG_SIZE):
     batch = np.expand_dims(arr, axis=0)
     return img, batch
 
-
 # ---------------------------------------------------------------------
-# 4. GRAD-CAM HELPERS (YOUR FIXED VERSION)
+# 3. GRAD-CAM HELPERS
 # ---------------------------------------------------------------------
 def get_last_conv_layer_name(model):
     """Try to find a suitable last convolution layer for Grad-CAM."""
@@ -142,13 +171,8 @@ def get_last_conv_layer_name(model):
 
     raise ValueError("No suitable conv layer found in model.")
 
-
 def make_gradcam_heatmap(model, img_array, class_index=None):
-    """
-    Robust Grad-CAM:
-    - Handles the case where model.output is a list
-    - Ensures preds is a tensor before indexing
-    """
+    """Robust Grad-CAM."""
     last_conv_name = get_last_conv_layer_name(model)
     last_conv_layer = model.get_layer(last_conv_name)
 
@@ -178,7 +202,6 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
     heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy()
 
-
 def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
     import cv2
 
@@ -196,48 +219,37 @@ def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
     overlay = np.clip(overlay, 0.0, 1.0)
     return overlay
 
-
 # ---------------------------------------------------------------------
-# 5) FCI (CHOQUET INTEGRAL) FUSION HELPERS (Sugeno λ-measure)
+# 4) FCI (CHOQUET INTEGRAL) FUSION HELPERS (Sugeno λ-measure)
 # ---------------------------------------------------------------------
 def normalize_weights(w):
     w = np.array(w, dtype=np.float64)
     w = np.maximum(w, 1e-12)
     return (w / np.sum(w)).tolist()
 
-
 def solve_sugeno_lambda(singletons, max_iter=200, tol=1e-10):
-    """
-    Solve λ from: Π(1 + λ g_i) = 1 + λ, where g_i are singleton measures.
-    For valid fuzzy measure, g_i in (0,1), sum can be <= 1 typically.
-    We use bisection on λ in (-1+eps, large).
-    """
+    """Solve λ from: Π(1 + λ g_i) = 1 + λ"""
     g = np.array(singletons, dtype=np.float64)
     eps = 1e-9
 
     def f(lam):
         return np.prod(1.0 + lam * g) - (1.0 + lam)
 
-    # If sum(g) == 1, λ = 0 is a solution (additive)
     if abs(np.sum(g) - 1.0) < 1e-8:
         return 0.0
 
-    # Search interval
     lo = -1.0 + eps
     hi = 1.0
     flo = f(lo)
 
-    # increase hi until sign change or hi too large
     for _ in range(60):
         fhi = f(hi)
         if flo * fhi < 0:
             break
         hi *= 2.0
         if hi > 1e6:
-            # fallback: treat as near-additive
             return 0.0
 
-    # Bisection
     for _ in range(max_iter):
         mid = (lo + hi) / 2.0
         fmid = f(mid)
@@ -250,13 +262,8 @@ def solve_sugeno_lambda(singletons, max_iter=200, tol=1e-10):
             flo = fmid
     return (lo + hi) / 2.0
 
-
 def sugeno_capacity(subset_idx, singletons, lam):
-    """
-    g(S) = (Π(1 + λ g_i) - 1) / λ  , if λ != 0
-         = Σ g_i , if λ == 0 (additive)
-    subset_idx: iterable indices in subset
-    """
+    """g(S) = (Π(1 + λ g_i) - 1) / λ"""
     g = np.array(singletons, dtype=np.float64)
     if len(subset_idx) == 0:
         return 0.0
@@ -265,24 +272,14 @@ def sugeno_capacity(subset_idx, singletons, lam):
     prod_term = np.prod(1.0 + lam * g[list(subset_idx)])
     return float((prod_term - 1.0) / lam)
 
-
 def choquet_integral_vector(x_vec, singletons):
-    """
-    Choquet integral for a single class, for M sources:
-      - sort x descending
-      - C = Σ (x_k - x_{k+1}) * g(A_k) with A_k = top k indices
-    x_vec: shape (M,)
-    singletons: list length M, singleton measures, normalized
-    """
+    """Choquet integral for a single class."""
     x = np.array(x_vec, dtype=np.float64)
     M = x.shape[0]
     lam = solve_sugeno_lambda(singletons)
 
-    # sort descending
     order = np.argsort(-x)
     x_sorted = x[order]
-
-    # x_{M+1} = 0
     x_next = np.append(x_sorted[1:], 0.0)
 
     total = 0.0
@@ -293,13 +290,8 @@ def choquet_integral_vector(x_vec, singletons):
         total += (x_sorted[k] - x_next[k]) * gAk
     return float(total)
 
-
 def fci_fuse_probs(probs_list, weights):
-    """
-    probs_list: list of (C,) arrays from each model
-    weights: singleton measures (len M), normalized
-    Returns fused probs (C,)
-    """
+    """Fuse probabilities using Choquet Integral."""
     probs = np.stack(probs_list, axis=0)  # (M, C)
     M, C = probs.shape
     fused = np.zeros((C,), dtype=np.float64)
@@ -307,7 +299,6 @@ def fci_fuse_probs(probs_list, weights):
     for c in range(C):
         fused[c] = choquet_integral_vector(probs[:, c], weights)
 
-    # normalize to sum=1
     fused = np.maximum(fused, 0.0)
     s = float(np.sum(fused))
     if s <= 1e-12:
@@ -316,12 +307,8 @@ def fci_fuse_probs(probs_list, weights):
         fused = fused / s
     return fused.astype(np.float32)
 
-
 def run_fci_ensemble(img_batch, selected_models, weights):
-    """
-    selected_models: dict name->loaded model
-    weights: list singleton measures aligned with selected_names order
-    """
+    """Run FCI ensemble."""
     selected_names = list(selected_models.keys())
 
     probs_list = []
@@ -332,8 +319,7 @@ def run_fci_ensemble(img_batch, selected_models, weights):
     fused_probs = fci_fuse_probs(probs_list, weights)
     pred_idx = int(np.argmax(fused_probs))
 
-    # Pick a representative model for Grad-CAM:
-    # 1) highest weight, tie -> highest confidence for predicted class
+    # Pick representative model for Grad-CAM
     w = np.array(weights, dtype=np.float64)
     best_w = np.max(w)
     cand = np.where(np.isclose(w, best_w))[0].tolist()
@@ -348,16 +334,12 @@ def run_fci_ensemble(img_batch, selected_models, weights):
 
     return fused_probs, pred_idx, rep_name, rep_model
 
-
 # ---------------------------------------------------------------------
-# 6) UI HELPERS: BUILD ALL COMBINATIONS LIST
+# 5) UI HELPERS: BUILD COMBINATIONS LIST
 # ---------------------------------------------------------------------
 def build_combo_label(combo):
-    fams = [MODELS_META[n]["family"] for n in combo]
-    fam_set = sorted(set(fams))
-    fam_txt = "+".join(fam_set)
-    return f"{len(combo)}-models | {fam_txt} | " + " , ".join(combo)
-
+    names_txt = " , ".join(combo)
+    return f"{len(combo)}-models | {names_txt}"
 
 def all_combinations(names):
     combos = []
@@ -367,27 +349,26 @@ def all_combinations(names):
             combos.append(comb)
     return combos
 
-
+ALL_MODEL_NAMES = list(MODEL_FILES.keys())
 ALL_COMBOS = all_combinations(ALL_MODEL_NAMES)
 ALL_COMBO_LABELS = [build_combo_label(c) for c in ALL_COMBOS]
 LABEL_TO_COMBO = {lab: comb for lab, comb in zip(ALL_COMBO_LABELS, ALL_COMBOS)}
 
-
 # ---------------------------------------------------------------------
-# 7. SIDEBAR CONTROLS
+# 6. SIDEBAR CONTROLS
 # ---------------------------------------------------------------------
 st.sidebar.title("Controls")
 
 mode = st.sidebar.radio(
     "Mode",
-    ["Single Model", "FCI-HybridNet (Choquet Fusion)"],
+    ["Single Model", "FCI-ResNet (Choquet Fusion)"],
     index=1
 )
 
 source = st.sidebar.radio(
     "Choose image source",
     ["Upload MRI", "Sample gallery"],
-    index=1
+    index=0
 )
 
 chosen_file = None
@@ -400,6 +381,7 @@ if source == "Upload MRI":
     if uploaded is not None:
         chosen_file = uploaded
 else:
+    SAMPLE_DIR = "sample_images"
     try:
         files = sorted(
             [f for f in os.listdir(SAMPLE_DIR)
@@ -430,7 +412,7 @@ if mode == "Single Model":
     )
 
 else:
-    st.sidebar.caption("Choose models for FCI-HybridNet")
+    st.sidebar.caption("Choose models for FCI-ResNet")
 
     combo_mode = st.sidebar.radio(
         "Combination selection",
@@ -439,30 +421,16 @@ else:
     )
 
     if combo_mode == "Auto (pick from all combinations)":
-        # filter controls
-        st.sidebar.write("Filters (optional)")
         size_filter = st.sidebar.multiselect(
             "Combo size",
             options=list(range(2, len(ALL_MODEL_NAMES) + 1)),
             default=[3]
         )
 
-        family_filter = st.sidebar.multiselect(
-            "Must include family (optional)",
-            options=sorted(set([m["family"] for m in MODELS_META.values()])),
-            default=[]
-        )
-
-        filtered_labels = []
-        for lab, combo in zip(ALL_COMBO_LABELS, ALL_COMBOS):
-            if size_filter and (len(combo) not in size_filter):
-                continue
-            if family_filter:
-                fams = set(MODELS_META[n]["family"] for n in combo)
-                ok = all(f in fams for f in family_filter)
-                if not ok:
-                    continue
-            filtered_labels.append(lab)
+        filtered_labels = [
+            lab for lab, combo in zip(ALL_COMBO_LABELS, ALL_COMBOS)
+            if not size_filter or len(combo) in size_filter
+        ]
 
         if not filtered_labels:
             st.sidebar.error("No combinations match your filters.")
@@ -478,22 +446,21 @@ else:
             default=[ALL_MODEL_NAMES[0], ALL_MODEL_NAMES[1]]
         )
         if selected_custom is None or len(selected_custom) < 2:
-            st.sidebar.warning("Select at least 2 models for FCI-HybridNet.")
+            st.sidebar.warning("Select at least 2 models for FCI-ResNet.")
             selected_custom = None
         else:
             selected_combo = tuple(selected_custom)
 
-    # Weights sliders for selected combo
+    # Weights sliders
     if selected_combo is not None:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Singleton weights (importance)")
-        st.sidebar.caption("These are used as fuzzy measures g({i}). They will be normalized automatically.")
+        st.sidebar.caption("Normalized automatically.")
 
         raw_w = []
         for name in selected_combo:
-            fam = MODELS_META[name]["family"]
             raw = st.sidebar.slider(
-                f"{name}  ({fam})",
+                f"{name}",
                 min_value=0.0,
                 max_value=1.0,
                 value=1.0,
@@ -508,17 +475,18 @@ else:
 
 run_button = st.sidebar.button("▶ Run prediction")
 
-
 # ---------------------------------------------------------------------
-# 8. MAIN AREA HEADER
+# 7. MAIN AREA HEADER
 # ---------------------------------------------------------------------
-st.title("FCI-HybridNet Alzheimer MRI Detection")
+st.title("FCI-ResNet Alzheimer MRI Detection")
 
 st.markdown(
     """
-This app supports **local Keras (.keras) models** stored in the `Models/` folder and performs:
-- **Single model inference**, or  
-- **FCI-HybridNet** using **Choquet Integral (Sugeno λ-measure)** decision fusion across any selected model combination.
+This app performs:
+- **Single model inference** with ResNet50, ResNet101, or ResNet152, or  
+- **FCI-ResNet** using **Choquet Integral (Sugeno λ-measure)** decision fusion across selected models.
+
+Models are downloaded from Google Drive on first use.
 """
 )
 
@@ -532,12 +500,11 @@ with col_info:
 
     if mode == "Single Model":
         st.write(f"**Model:** {selected_single}")
-        st.write(f"**Family:** {MODELS_META[selected_single]['family']}")
     else:
         st.write(f"**FCI Models ({len(selected_combo) if selected_combo else 0}):**")
         if selected_combo:
             for i, n in enumerate(selected_combo):
-                st.write(f"- {n}  ({MODELS_META[n]['family']}) | weight={weights[i]:.3f}")
+                st.write(f"- {n} | weight={weights[i]:.3f}")
         else:
             st.write("_No combination selected yet._")
 
@@ -556,13 +523,13 @@ if chosen_file is None:
     st.stop()
 
 # ---------------------------------------------------------------------
-# 9. LOAD IMAGE & RUN MODEL
+# 8. LOAD IMAGE & RUN MODEL
 # ---------------------------------------------------------------------
 orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 
 with st.spinner("Running prediction…"):
     if mode == "Single Model":
-        model = load_model_by_name(selected_single)
+        model = load_single_model(selected_single)
         preds = model.predict(batch, verbose=0)[0]
         probs = preds.astype(np.float32)
         pred_idx = int(np.argmax(probs))
@@ -571,7 +538,6 @@ with st.spinner("Running prediction…"):
         chosen_key = selected_single
 
     else:
-        # load selected models
         selected_names = tuple(selected_combo)
         models_dict = load_models_batch(selected_names)
 
@@ -580,7 +546,7 @@ with st.spinner("Running prediction…"):
             selected_models=models_dict,
             weights=weights
         )
-        cam_title = f"FCI-HybridNet (Rep: {rep_name})"
+        cam_title = f"FCI-ResNet (Rep: {rep_name})"
         chosen_key = rep_name
 
 pred_class = CLASS_NAMES[pred_idx]
@@ -590,7 +556,7 @@ with st.spinner("Computing Grad-CAM…"):
     overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
 
 # ---------------------------------------------------------------------
-# 10. PREDICTION OUTPUT
+# 9. PREDICTION OUTPUT
 # ---------------------------------------------------------------------
 st.markdown("---")
 st.subheader("Prediction Output")
@@ -622,7 +588,7 @@ if mode != "Single Model":
     st.caption(f"Grad-CAM shown using representative model: **{chosen_key}** (from selected ensemble).")
 
 # ---------------------------------------------------------------------
-# 11. Save generated image
+# 10. Save generated image
 # ---------------------------------------------------------------------
 buf = io.BytesIO()
 fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
