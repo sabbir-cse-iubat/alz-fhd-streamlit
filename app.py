@@ -9,14 +9,13 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import gdown
 
-from itertools import combinations
 from tensorflow.keras.layers import Conv2D, DepthwiseConv2D, SeparableConv2D
 
-# ---------------------------------------------------------------------
+# ============================================================
 # 0. BASIC SETUP
-# ---------------------------------------------------------------------
+# ============================================================
 st.set_page_config(
-    page_title="FCI-ResNet Alzheimer MRI",
+    page_title="FCI-ResNetV2 Alzheimer MRI",
     layout="wide"
 )
 
@@ -28,14 +27,14 @@ MODEL_CACHE_DIR = "models_cache"
 os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
 # Google Drive IDs (.h5)
-H5_RESNET50_ID = "1H7iUcI94ul01BWqtGwf-LZ2jKnATf17l"
-H5_RESNET101_ID = "11UB7-lHDqcAuPNnA_q8wAQrgS2CijHV6"
-H5_RESNET152_ID = "1Rg0d2efE-oV_usoJkr6F2xXLCRW9yPTi"
+H5_RESNET50V2_ID = "1H7iUcI94ul01BWqtGwf-LZ2jKnATf17l"
+H5_RESNET101V2_ID = "11UB7-lHDqcAuPNnA_q8wAQrgS2CijHV6"
+H5_RESNET152V2_ID = "1Rg0d2efE-oV_usoJkr6F2xXLCRW9yPTi"
 
 MODEL_FILES = {
-    "ResNet50": ("az_model_resnet50.h5", H5_RESNET50_ID),
-    "ResNet101": ("az_model_resnet101.h5", H5_RESNET101_ID),
-    "ResNet152": ("az_model_resnet152.h5", H5_RESNET152_ID),
+    "ResNet50V2": ("az_model_resnet50v2.h5", H5_RESNET50V2_ID),
+    "ResNet101V2": ("az_model_resnet101v2.h5", H5_RESNET101V2_ID),
+    "ResNet152V2": ("az_model_resnet152v2.h5", H5_RESNET152V2_ID),
 }
 
 def gdrive_direct_url(file_id: str) -> str:
@@ -58,16 +57,12 @@ def _validate_download(path: str):
             "Downloaded file is not a valid .h5.\n\n"
             "Fix:\n"
             "1) Google Drive -> Share -> Anyone with the link (Viewer)\n"
-            "2) Verify FILE IDs are correct\n"
-            f"Bad file: {path} ({size} bytes)"
+            "2) Verify FILE IDs are correct"
         )
 
 def _download_if_needed(file_id: str, filename: str) -> str:
     if not file_id or "PASTE_" in file_id:
-        raise RuntimeError(
-            "Model IDs are not set.\n"
-            "Open app.py and set correct Google Drive FILE IDs."
-        )
+        raise RuntimeError("Model IDs are not set. Check Google Drive FILE IDs.")
 
     local_path = os.path.join(MODEL_CACHE_DIR, filename)
 
@@ -86,9 +81,9 @@ def _download_if_needed(file_id: str, filename: str) -> str:
     _validate_download(local_path)
     return local_path
 
-# ---------------------------------------------------------------------
-# 1) BUILD MODELS (matching training architecture)
-# ---------------------------------------------------------------------
+# ============================================================
+# 1. BUILD MODELS
+# ============================================================
 def _build_head(backbone):
     return tf.keras.Sequential([
         backbone,
@@ -101,14 +96,14 @@ def _build_head(backbone):
     ])
 
 def build_model_by_name(model_name: str):
-    if model_name == "ResNet50":
-        base = tf.keras.applications.ResNet50(include_top=False, weights=None, input_shape=(224, 224, 3))
+    if model_name == "ResNet50V2":
+        base = tf.keras.applications.ResNet50V2(include_top=False, weights=None, input_shape=(224, 224, 3))
         return _build_head(base)
-    if model_name == "ResNet101":
-        base = tf.keras.applications.ResNet101(include_top=False, weights=None, input_shape=(224, 224, 3))
+    if model_name == "ResNet101V2":
+        base = tf.keras.applications.ResNet101V2(include_top=False, weights=None, input_shape=(224, 224, 3))
         return _build_head(base)
-    if model_name == "ResNet152":
-        base = tf.keras.applications.ResNet152(include_top=False, weights=None, input_shape=(224, 224, 3))
+    if model_name == "ResNet152V2":
+        base = tf.keras.applications.ResNet152V2(include_top=False, weights=None, input_shape=(224, 224, 3))
         return _build_head(base)
     raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -125,18 +120,17 @@ def load_single_model(model_name: str):
     return load_model_weights_safe(model_name, local_path)
 
 @st.cache_resource(show_spinner=False)
-def load_models_batch(selected_names: tuple):
-    """Load multiple models once."""
-    loaded = {}
-    for name in selected_names:
-        loaded[name] = load_single_model(name)
-    return loaded
+def load_all_models():
+    return {
+        "ResNet50V2": load_single_model("ResNet50V2"),
+        "ResNet101V2": load_single_model("ResNet101V2"),
+        "ResNet152V2": load_single_model("ResNet152V2"),
+    }
 
-# ---------------------------------------------------------------------
-# 2) IMAGE HELPERS
-# ---------------------------------------------------------------------
+# ============================================================
+# 2. IMAGE HELPERS
+# ============================================================
 def load_image_from_file(file, img_size=IMG_SIZE):
-    """Load PIL image from uploaded file or path and resize."""
     if isinstance(file, str):
         img = Image.open(file).convert("RGB")
     else:
@@ -146,11 +140,10 @@ def load_image_from_file(file, img_size=IMG_SIZE):
     batch = np.expand_dims(arr, axis=0)
     return img, batch
 
-# ---------------------------------------------------------------------
+# ============================================================
 # 3. GRAD-CAM HELPERS
-# ---------------------------------------------------------------------
+# ============================================================
 def get_last_conv_layer_name(model):
-    """Try to find a suitable last convolution layer for Grad-CAM."""
     conv_types = (Conv2D, DepthwiseConv2D, SeparableConv2D)
 
     for layer in reversed(model.layers):
@@ -172,7 +165,6 @@ def get_last_conv_layer_name(model):
     raise ValueError("No suitable conv layer found in model.")
 
 def make_gradcam_heatmap(model, img_array, class_index=None):
-    """Robust Grad-CAM."""
     last_conv_name = get_last_conv_layer_name(model)
     last_conv_layer = model.get_layer(last_conv_name)
 
@@ -204,7 +196,6 @@ def make_gradcam_heatmap(model, img_array, class_index=None):
 
 def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
     import cv2
-
     img = np.array(pil_image).astype("float32") / 255.0
     h, w = img.shape[:2]
 
@@ -219,163 +210,213 @@ def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
     overlay = np.clip(overlay, 0.0, 1.0)
     return overlay
 
-# ---------------------------------------------------------------------
-# 4) FCI (CHOQUET INTEGRAL) FUSION HELPERS (Sugeno λ-measure)
-# ---------------------------------------------------------------------
-def normalize_weights(w):
-    w = np.array(w, dtype=np.float64)
-    w = np.maximum(w, 1e-12)
-    return (w / np.sum(w)).tolist()
+# ============================================================
+# 4. ENSEMBLE HELPERS (Auto-combine all 3 models equally)
+# ============================================================
+def ensemble_predict_simple(models_dict, img_batch):
+    """Simple averaging ensemble of all 3 models."""
+    keys = ["ResNet50V2", "ResNet101V2", "ResNet152V2"]
+    preds_list = []
+    
+    for k in keys:
+        p = models_dict[k].predict(img_batch, verbose=0)[0]
+        preds_list.append(p)
+    
+    # Average predictions
+    avg_preds = np.mean(preds_list, axis=0).astype(np.float32)
+    pred_idx = int(np.argmax(avg_preds))
+    
+    # Pick model with highest confidence for Grad-CAM
+    best_idx = 0
+    best_conf = preds_list[0][pred_idx]
+    for i in range(1, 3):
+        if preds_list[i][pred_idx] > best_conf:
+            best_conf = preds_list[i][pred_idx]
+            best_idx = i
+    
+    return pred_idx, avg_preds, keys[best_idx], models_dict[keys[best_idx]]
 
-def solve_sugeno_lambda(singletons, max_iter=200, tol=1e-10):
-    """Solve λ from: Π(1 + λ g_i) = 1 + λ"""
-    g = np.array(singletons, dtype=np.float64)
-    eps = 1e-9
+# ============================================================
+# 5. MODERN UI STYLING
+# ============================================================
+st.markdown(
+    """
+<style>
+:root{
+  --bg: #ffffff;
+  --ink: #0b1220;
+  --muted: #5b6475;
+  --line: #eef0f6;
+  --card: rgba(255,255,255,0.86);
+  --shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  --shadow2: 0 10px 24px rgba(15, 23, 42, 0.06);
+  --radius: 20px;
+}
 
-    def f(lam):
-        return np.prod(1.0 + lam * g) - (1.0 + lam)
+html, body, [class*="css"] { 
+  font-family: 'Segoe UI', Trebuchet MS, sans-serif !important;
+}
+section.main { background: var(--bg); }
+.block-container { padding-top: 1.2rem; padding-bottom: 2.2rem; max-width: 1220px; }
 
-    if abs(np.sum(g) - 1.0) < 1e-8:
-        return 0.0
+/* Sidebar */
+[data-testid="stSidebar"]{
+  background: linear-gradient(135deg, #fbfbff 0%, #f3f4f9 100%);
+  border-right: 1px solid var(--line);
+}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+  color: var(--ink);
+  font-weight: 950;
+}
+[data-testid="stSidebar"] .stRadio label, [data-testid="stSidebar"] .stSelectbox label, [data-testid="stSidebar"] label {
+  color: #111827 !important;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+[data-testid="stSidebar"] .stButton button{
+  width: 100%;
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
+  font-weight: 950;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  box-shadow: var(--shadow2);
+  font-size: 1.05rem;
+}
+[data-testid="stSidebar"] .stButton button:hover{ 
+  filter: brightness(1.1);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(102, 126, 234, 0.3);
+}
 
-    lo = -1.0 + eps
-    hi = 1.0
-    flo = f(lo)
+/* Hero */
+.hero{
+  position: relative;
+  border: 2px solid var(--line);
+  border-radius: 28px;
+  padding: 2.5rem 2rem;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  background: radial-gradient(1200px 400px at 15% 0%, rgba(102, 126, 234, 0.22), transparent 60%),
+              radial-gradient(1200px 400px at 85% 100%, rgba(118, 75, 162, 0.16), transparent 60%),
+              linear-gradient(180deg, #ffffff 0%, #fbfbff 100%);
+}
+.hero h1{
+  margin: 0;
+  font-size: 2.8rem;
+  letter-spacing: -0.05em;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 950;
+}
+.hero p{
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 1.08rem;
+  line-height: 1.65;
+  max-width: 980px;
+}
+.pills{ 
+  margin-top: 1.2rem; 
+  display: flex; 
+  flex-wrap: wrap; 
+  gap: 0.6rem; 
+}
+.pill{
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  border: 1.5px solid var(--line);
+  background: linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(248,250,254,0.8) 100%);
+  color: #667eea;
+  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+}
 
-    for _ in range(60):
-        fhi = f(hi)
-        if flo * fhi < 0:
-            break
-        hi *= 2.0
-        if hi > 1e6:
-            return 0.0
+/* Cards */
+.card{
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 1.4rem;
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(10px);
+}
+.card-title{
+  font-size: 1.3rem;
+  font-weight: 950;
+  margin: 0 0 0.8rem;
+  color: var(--ink);
+}
+.small{
+  color: var(--muted);
+  font-size: 0.98rem;
+  line-height: 1.6;
+}
 
-    for _ in range(max_iter):
-        mid = (lo + hi) / 2.0
-        fmid = f(mid)
-        if abs(fmid) < tol:
-            return mid
-        if flo * fmid < 0:
-            hi = mid
-        else:
-            lo = mid
-            flo = fmid
-    return (lo + hi) / 2.0
+/* Metric chips */
+.chips{ 
+  display: flex; 
+  flex-wrap: wrap; 
+  gap: 0.6rem; 
+  margin-top: 0.4rem; 
+}
+.chip{
+  border: 1.5px solid #e9edf7;
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  background: linear-gradient(135deg, rgba(255,255,255,0.8) 0%, rgba(248,250,254,0.6) 100%);
+  font-weight: 900;
+  color: #667eea;
+  font-size: 0.9rem;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.08);
+}
 
-def sugeno_capacity(subset_idx, singletons, lam):
-    """g(S) = (Π(1 + λ g_i) - 1) / λ"""
-    g = np.array(singletons, dtype=np.float64)
-    if len(subset_idx) == 0:
-        return 0.0
-    if abs(lam) < 1e-12:
-        return float(np.sum(g[list(subset_idx)]))
-    prod_term = np.prod(1.0 + lam * g[list(subset_idx)])
-    return float((prod_term - 1.0) / lam)
+/* Buttons */
+div.stDownloadButton button{
+  border-radius: 14px !important;
+  padding: 0.8rem 1.2rem !important;
+  font-weight: 950 !important;
+  border: none !important;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  box-shadow: var(--shadow2);
+}
+div.stDownloadButton button:hover{ 
+  filter: brightness(1.1) !important;
+  transform: translateY(-2px);
+}
 
-def choquet_integral_vector(x_vec, singletons):
-    """Choquet integral for a single class."""
-    x = np.array(x_vec, dtype=np.float64)
-    M = x.shape[0]
-    lam = solve_sugeno_lambda(singletons)
+footer { visibility: hidden; }
+</style>
+""",
+    unsafe_allow_html=True
+)
 
-    order = np.argsort(-x)
-    x_sorted = x[order]
-    x_next = np.append(x_sorted[1:], 0.0)
-
-    total = 0.0
-    top_set = []
-    for k in range(M):
-        top_set.append(order[k])
-        gAk = sugeno_capacity(top_set, singletons, lam)
-        total += (x_sorted[k] - x_next[k]) * gAk
-    return float(total)
-
-def fci_fuse_probs(probs_list, weights):
-    """Fuse probabilities using Choquet Integral."""
-    probs = np.stack(probs_list, axis=0)  # (M, C)
-    M, C = probs.shape
-    fused = np.zeros((C,), dtype=np.float64)
-
-    for c in range(C):
-        fused[c] = choquet_integral_vector(probs[:, c], weights)
-
-    fused = np.maximum(fused, 0.0)
-    s = float(np.sum(fused))
-    if s <= 1e-12:
-        fused = np.ones((C,), dtype=np.float64) / C
-    else:
-        fused = fused / s
-    return fused.astype(np.float32)
-
-def run_fci_ensemble(img_batch, selected_models, weights):
-    """Run FCI ensemble."""
-    selected_names = list(selected_models.keys())
-
-    probs_list = []
-    for name in selected_names:
-        p = selected_models[name].predict(img_batch, verbose=0)[0]
-        probs_list.append(p)
-
-    fused_probs = fci_fuse_probs(probs_list, weights)
-    pred_idx = int(np.argmax(fused_probs))
-
-    # Pick representative model for Grad-CAM
-    w = np.array(weights, dtype=np.float64)
-    best_w = np.max(w)
-    cand = np.where(np.isclose(w, best_w))[0].tolist()
-    if len(cand) == 1:
-        rep_i = cand[0]
-    else:
-        confs = [probs_list[i][pred_idx] for i in cand]
-        rep_i = cand[int(np.argmax(confs))]
-
-    rep_name = selected_names[rep_i]
-    rep_model = selected_models[rep_name]
-
-    return fused_probs, pred_idx, rep_name, rep_model
-
-# ---------------------------------------------------------------------
-# 5) UI HELPERS: BUILD COMBINATIONS LIST
-# ---------------------------------------------------------------------
-def build_combo_label(combo):
-    names_txt = " , ".join(combo)
-    return f"{len(combo)}-models | {names_txt}"
-
-def all_combinations(names):
-    combos = []
-    N = len(names)
-    for r in range(2, N + 1):
-        for comb in combinations(names, r):
-            combos.append(comb)
-    return combos
-
-ALL_MODEL_NAMES = list(MODEL_FILES.keys())
-ALL_COMBOS = all_combinations(ALL_MODEL_NAMES)
-ALL_COMBO_LABELS = [build_combo_label(c) for c in ALL_COMBOS]
-LABEL_TO_COMBO = {lab: comb for lab, comb in zip(ALL_COMBO_LABELS, ALL_COMBOS)}
-
-# ---------------------------------------------------------------------
-# 6. SIDEBAR CONTROLS
-# ---------------------------------------------------------------------
-st.sidebar.title("Controls")
+# ============================================================
+# 6. SIDEBAR
+# ============================================================
+st.sidebar.markdown("## ⚙️ Controls")
 
 mode = st.sidebar.radio(
-    "Mode",
-    ["Single Model", "FCI-ResNet (Choquet Fusion)"],
+    "Select mode",
+    ["🔬 Single Model", "🧠 Ensemble All 3"],
     index=1
 )
 
 source = st.sidebar.radio(
-    "Choose image source",
-    ["Upload MRI", "Sample gallery"],
-    index=0
+    "Image source",
+    ["📤 Upload MRI", "🖼️ Sample gallery"],
+    index=1
 )
 
 chosen_file = None
 
-if source == "Upload MRI":
+if source == "📤 Upload MRI":
     uploaded = st.sidebar.file_uploader(
-        "Upload a brain MRI image",
+        "Upload an MRI image",
         type=["png", "jpg", "jpeg"]
     )
     if uploaded is not None:
@@ -391,207 +432,168 @@ else:
         files = []
 
     if files:
-        sample_name = st.sidebar.selectbox("Pick a sample image", files)
+        sample_name = st.sidebar.selectbox("Pick a sample", files)
         chosen_file = os.path.join(SAMPLE_DIR, sample_name)
     else:
-        st.sidebar.warning("No images found in sample_images/")
+        st.sidebar.warning("No images in sample_images/")
 
-st.sidebar.markdown("---")
-
-# Model selection UI
-selected_single = None
-selected_combo = None
-selected_custom = None
-weights = None
-
-if mode == "Single Model":
-    selected_single = st.sidebar.selectbox(
-        "Select a model",
-        ALL_MODEL_NAMES,
+if mode == "🔬 Single Model":
+    st.sidebar.markdown("---")
+    selected_model = st.sidebar.selectbox(
+        "Choose model",
+        ["ResNet50V2", "ResNet101V2", "ResNet152V2"],
         index=0
     )
-
 else:
-    st.sidebar.caption("Choose models for FCI-ResNet")
+    selected_model = None
 
-    combo_mode = st.sidebar.radio(
-        "Combination selection",
-        ["Auto (pick from all combinations)", "Custom (manual select)"],
-        index=0
-    )
+run_button = st.sidebar.button("▶ Run Prediction", use_container_width=True)
 
-    if combo_mode == "Auto (pick from all combinations)":
-        size_filter = st.sidebar.multiselect(
-            "Combo size",
-            options=list(range(2, len(ALL_MODEL_NAMES) + 1)),
-            default=[3]
-        )
-
-        filtered_labels = [
-            lab for lab, combo in zip(ALL_COMBO_LABELS, ALL_COMBOS)
-            if not size_filter or len(combo) in size_filter
-        ]
-
-        if not filtered_labels:
-            st.sidebar.error("No combinations match your filters.")
-            st.stop()
-
-        selected_label = st.sidebar.selectbox("Select a combination", filtered_labels, index=0)
-        selected_combo = LABEL_TO_COMBO[selected_label]
-
-    else:
-        selected_custom = st.sidebar.multiselect(
-            "Pick models (min 2)",
-            options=ALL_MODEL_NAMES,
-            default=[ALL_MODEL_NAMES[0], ALL_MODEL_NAMES[1]]
-        )
-        if selected_custom is None or len(selected_custom) < 2:
-            st.sidebar.warning("Select at least 2 models for FCI-ResNet.")
-            selected_custom = None
-        else:
-            selected_combo = tuple(selected_custom)
-
-    # Weights sliders
-    if selected_combo is not None:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Singleton weights (importance)")
-        st.sidebar.caption("Normalized automatically.")
-
-        raw_w = []
-        for name in selected_combo:
-            raw = st.sidebar.slider(
-                f"{name}",
-                min_value=0.0,
-                max_value=1.0,
-                value=1.0,
-                step=0.05
-            )
-            raw_w.append(raw)
-
-        if float(np.sum(raw_w)) <= 1e-9:
-            st.sidebar.error("At least one weight must be > 0.")
-            st.stop()
-        weights = normalize_weights(raw_w)
-
-run_button = st.sidebar.button("▶ Run prediction")
-
-# ---------------------------------------------------------------------
-# 7. MAIN AREA HEADER
-# ---------------------------------------------------------------------
-st.title("FCI-ResNet Alzheimer MRI Detection")
-
+# ============================================================
+# 7. HERO HEADER
+# ============================================================
 st.markdown(
     """
-This app performs:
-- **Single model inference** with ResNet50, ResNet101, or ResNet152, or  
-- **FCI-ResNet** using **Choquet Integral (Sugeno λ-measure)** decision fusion across selected models.
-
-Models are downloaded from Google Drive on first use.
-"""
+<div class="hero">
+  <h1>🧠 FCI-ResNetV2 Alzheimer MRI</h1>
+  <p>
+    Advanced CNN ensemble with <b>ResNet50V2, ResNet101V2, ResNet152V2</b> and 
+    <b>Grad-CAM visualization</b> for clinical brain MRI analysis. 
+    Models auto-download from Google Drive.
+  </p>
+  <div class="pills">
+    <span class="pill">ResNet50V2</span>
+    <span class="pill">ResNet101V2</span>
+    <span class="pill">ResNet152V2</span>
+    <span class="pill">Ensemble Mode</span>
+    <span class="pill">Grad-CAM</span>
+    <span class="pill">Google Drive</span>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True
 )
 
-col_info, col_out = st.columns([1, 1])
-
-with col_info:
-    st.info("👈 Select mode, models & image, then click **Run prediction**.")
-    st.subheader("Selected options")
-    st.write(f"**Mode:** {mode}")
-    st.write(f"**Source:** {source}")
-
-    if mode == "Single Model":
-        st.write(f"**Model:** {selected_single}")
-    else:
-        st.write(f"**FCI Models ({len(selected_combo) if selected_combo else 0}):**")
-        if selected_combo:
-            for i, n in enumerate(selected_combo):
-                st.write(f"- {n} | weight={weights[i]:.3f}")
-        else:
-            st.write("_No combination selected yet._")
-
-    if isinstance(chosen_file, str):
-        st.write(f"**Image path:** `{chosen_file}`")
-    elif chosen_file is None:
-        st.write("_No image selected yet._")
-    else:
-        st.write(f"**Uploaded file:** `{chosen_file.name}`")
-
+# ============================================================
+# Pre-run info card
+# ============================================================
 if not run_button:
+    st.markdown(
+        """
+<div class="card" style="margin-top: 1.5rem;">
+  <div class="card-title">✨ How to Use</div>
+  <div class="small">
+    1) Pick <b>Ensemble All 3</b> (recommended) or a single ResNetV2 model<br/>
+    2) Upload an MRI or select from gallery<br/>
+    3) Click <b>▶ Run Prediction</b> to see probabilities + Grad-CAM heatmap<br/><br/>
+    <b style="color: #667eea;">💡 Tip:</b> Ensemble mode combines all 3 models for better accuracy!
+  </div>
+</div>
+""",
+        unsafe_allow_html=True
+    )
     st.stop()
 
 if chosen_file is None:
-    st.error("Please upload or select an image first.")
+    st.error("❌ Please upload or select an image first.")
     st.stop()
 
-# ---------------------------------------------------------------------
-# 8. LOAD IMAGE & RUN MODEL
-# ---------------------------------------------------------------------
+# ============================================================
+# 8. INFERENCE + GRADCAM
+# ============================================================
 orig_img, batch = load_image_from_file(chosen_file, IMG_SIZE)
 
-with st.spinner("Running prediction…"):
-    if mode == "Single Model":
-        model = load_single_model(selected_single)
-        preds = model.predict(batch, verbose=0)[0]
-        probs = preds.astype(np.float32)
-        pred_idx = int(np.argmax(probs))
-        grad_model = model
-        cam_title = selected_single
-        chosen_key = selected_single
+try:
+    with st.spinner("🔄 Running prediction…"):
+        if mode == "🧠 Ensemble All 3":
+            models_dict = load_all_models()
+            pred_idx, probs, chosen_key, grad_model = ensemble_predict_simple(models_dict, batch)
+            cam_title = "Ensemble All 3"
+            mode_label = "Ensemble Mode"
+        else:
+            grad_model = load_single_model(selected_model)
+            probs = grad_model.predict(batch, verbose=0)[0].astype(np.float32)
+            pred_idx = int(np.argmax(probs))
+            chosen_key = selected_model
+            cam_title = selected_model
+            mode_label = "Single Model"
 
-    else:
-        selected_names = tuple(selected_combo)
-        models_dict = load_models_batch(selected_names)
+    pred_class = CLASS_NAMES[pred_idx]
+    confidence = float(np.max(probs))
 
-        probs, pred_idx, rep_name, grad_model = run_fci_ensemble(
-            img_batch=batch,
-            selected_models=models_dict,
-            weights=weights
-        )
-        cam_title = f"FCI-ResNet (Rep: {rep_name})"
-        chosen_key = rep_name
+    with st.spinner("🎨 Computing Grad-CAM…"):
+        heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
+        overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
 
-pred_class = CLASS_NAMES[pred_idx]
+except Exception as e:
+    st.error(f"❌ Error: {str(e)}")
+    st.stop()
 
-with st.spinner("Computing Grad-CAM…"):
-    heatmap = make_gradcam_heatmap(grad_model, batch, class_index=pred_idx)
-    overlay = overlay_heatmap_on_image(heatmap, orig_img, alpha=0.45)
+# ============================================================
+# 9. OUTPUT SECTION
+# ============================================================
+st.markdown(
+    f"""
+    <div class="card" style="margin-top: 1.5rem;">
+      <div class="card-title">📊 Prediction Output</div>
+      <div class="chips">
+        <span class="chip"><b>🔬 Mode:</b> {mode_label}</span>
+        <span class="chip"><b>📄 Model:</b> {cam_title}</span>
+        <span class="chip"><b>✅ Prediction:</b> {pred_class}</span>
+        <span class="chip"><b>📈 Confidence:</b> {confidence:.1%}</span>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-# ---------------------------------------------------------------------
-# 9. PREDICTION OUTPUT
-# ---------------------------------------------------------------------
-st.markdown("---")
-st.subheader("Prediction Output")
+# ============================================================
+# VISUALIZATION
+# ============================================================
+st.markdown('<div class="card" style="margin-top: 1.3rem;">', unsafe_allow_html=True)
 
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+fig, axes = plt.subplots(
+    1, 3,
+    figsize=(14, 4.8),
+    gridspec_kw={"width_ratios": [1, 1, 0.95]},
+    facecolor="white"
+)
 
+# Original
 axes[0].imshow(orig_img)
-axes[0].set_title(f"Original Image\nClass Name: {pred_class}")
+axes[0].set_title(f"Original MRI\n{pred_class}", fontsize=12, fontweight="bold", color="#667eea")
 axes[0].axis("off")
 
+# Grad-CAM overlay
 axes[1].imshow(overlay)
-axes[1].set_title(f"Grad-CAM\n{cam_title}")
+axes[1].set_title(f"Grad-CAM Heatmap\n{cam_title}", fontsize=12, fontweight="bold", color="#667eea")
 axes[1].axis("off")
 
-axes[2].barh(CLASS_NAMES, probs)
+# Probabilities bar chart
+colors = ["#667eea" if i == pred_idx else "#cbd5e1" for i in range(len(CLASS_NAMES))]
+axes[2].barh(CLASS_NAMES, probs, color=colors, edgecolor="white", linewidth=1.5)
 axes[2].set_xlim(0, 1)
-axes[2].set_xlabel("Probability")
-axes[2].set_title("Class Probabilities")
+axes[2].set_xlabel("Probability", fontsize=11, fontweight="bold")
+axes[2].set_title("Class Probabilities", fontsize=12, fontweight="bold", color="#667eea")
+axes[2].grid(axis="x", alpha=0.2, linestyle="--")
 
 for i, cls in enumerate(CLASS_NAMES):
-    axes[2].text(float(probs[i]) + 0.01, i, f"{float(probs[i]):.3f}", va="center")
+    axes[2].text(
+        probs[i] + 0.018,
+        i,
+        f"{probs[i]:.1%}",
+        va="center",
+        fontsize=10,
+        fontweight="bold",
+        color="#667eea" if i == pred_idx else "#0b1220"
+    )
 
-plt.tight_layout()
+plt.tight_layout(pad=2.0)
 st.pyplot(fig)
 
-st.markdown(f"#### Final Prediction : *{pred_class}*")
-
-if mode != "Single Model":
-    st.caption(f"Grad-CAM shown using representative model: **{chosen_key}** (from selected ensemble).")
-
-# ---------------------------------------------------------------------
-# 10. Save generated image
-# ---------------------------------------------------------------------
+# Download button
 buf = io.BytesIO()
-fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+fig.savefig(buf, format="png", bbox_inches="tight", dpi=180, facecolor="white")
 buf.seek(0)
 
 st.download_button(
@@ -599,4 +601,18 @@ st.download_button(
     data=buf,
     file_name=f"result_{pred_class}.png",
     mime="image/png"
+)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# FOOTER
+# ============================================================
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eef0f6; color: #5b6475; font-size: 0.9rem;">
+      <b>FCI-ResNetV2 Alzheimer Detection System</b> | Clinical MRI Analysis | Powered by TensorFlow & Streamlit
+    </div>
+    """,
+    unsafe_allow_html=True
 )
