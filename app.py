@@ -187,6 +187,12 @@ def gradcam_heatmap(model, img_tensor, class_index, target_layer_name):
 )
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(img_tensor, training=False)
+
+        st.write(type(preds))
+        st.write(preds)
+        st.stop()
+        preds = tf.convert_to_tensor(preds)
+        conv_out = tf.convert_to_tensor(conv_out)
         y = preds[:, class_index]
     grads = tape.gradient(y, conv_out)
     pooled_grads = tf.reduce_mean(grads, axis=(1, 2))
