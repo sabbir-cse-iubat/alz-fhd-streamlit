@@ -77,7 +77,7 @@ def _download_if_needed(file_id: str, filename: str) -> str:
                 pass
 
     url = gdrive_direct_url(file_id)
-    gdown.download(url, local_path, quiet=True, fuzzy=True)
+    gdown.download(url, local_path, quiet=True)
     _validate_download(local_path)
     return local_path
 
