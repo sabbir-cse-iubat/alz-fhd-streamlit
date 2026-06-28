@@ -496,10 +496,18 @@ st.markdown(
 )
 
 # ============================================================
+# Session State Initialization
+# ============================================================
+if "prediction_done" not in st.session_state:
+    st.session_state.prediction_done = False
+
+# ============================================================
 # Pre-run info card
 # ============================================================
 
-if not run_button:
+# Show the instruction card ONLY if no prediction has been made yet
+if (not run_button) and (not st.session_state.prediction_done):
+
     st.markdown(
         """
 <div class="card" style="margin-top: 1.5rem;">
@@ -507,18 +515,23 @@ if not run_button:
   <div class="small">
     1) Pick <b>FCI Ensemble</b> (recommended) or a single ResNetV2 model<br/>
     2) Upload an MRI or select from gallery<br/>
-    3) Click <b>▶ Run Prediction</b> to see probabilities + advanced Grad-CAM heatmap<br/><br/>
+    3) Click <b>▶ Run Prediction</b> to see probabilities and the Grad-CAM heatmap.
   </div>
 </div>
 """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
+
     st.stop()
 
+# ============================================================
+# Validate Image
+# ============================================================
 if chosen_file is None:
-    st.error("❌ Please upload or select an image first.")
-    st.stop()
 
+    st.error("❌ Please upload or select an image first.")
+
+    st.stop()
 # ============================================================
 # 9. INFERENCE + ADVANCED GRADCAM
 # ============================================================
