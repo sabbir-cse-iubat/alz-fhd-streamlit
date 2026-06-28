@@ -123,70 +123,95 @@ def load_image_from_file(file, img_size=IMG_SIZE):
 # 3. GRAD-CAM HELPERS
 # ============================================================
 def get_last_conv_layer_name(model):
-    conv_types = (Conv2D, DepthwiseConv2D, SeparableConv2D)
+    conv_layer_names = []
 
-    for layer in reversed(model.layers):
-        if isinstance(layer, conv_types):
-            return layer.name
-        if hasattr(layer, "layers"):
-            for sub in reversed(layer.layers):
-                if isinstance(sub, conv_types):
-                    return sub.name
-
-    for layer in reversed(model.layers):
+    for layer in model.layers:
         try:
-            out_shape = layer.output_shape
+            out = layer.output
+            if len(out.shape) == 4:
+                conv_layer_names.append(layer.name)
         except Exception:
             continue
-        if len(out_shape) == 4:
-            return layer.name
 
-    raise ValueError("No suitable conv layer found in model.")
+    if not conv_layer_names:
+        raise ValueError("No convolution layer found.")
+
+    return conv_layer_names[-1]
 
 def make_gradcam_heatmap(model, img_array, class_index=None):
+
     last_conv_name = get_last_conv_layer_name(model)
+
     last_conv_layer = model.get_layer(last_conv_name)
 
     grad_model = tf.keras.models.Model(
-        [model.inputs],
-        [last_conv_layer.output, model.output]
+        inputs=model.inputs,
+        outputs=[last_conv_layer.output, model.output]
     )
 
     with tf.GradientTape() as tape:
-        conv_outputs, preds = grad_model(img_array)
 
-        if isinstance(preds, (list, tuple)):
-            preds = preds[0]
-
-        preds = tf.convert_to_tensor(preds)
+        conv_outputs, predictions = grad_model(img_array)
 
         if class_index is None:
-            class_index = tf.argmax(preds[0])
+            class_index = tf.argmax(predictions[0])
 
-        class_channel = preds[:, class_index]
+        class_channel = predictions[:, class_index]
 
     grads = tape.gradient(class_channel, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
+    pooled_grads = tf.reduce_mean(
+        grads,
+        axis=(0,1,2)
+    )
+
     conv_outputs = conv_outputs[0]
 
-    heatmap = tf.reduce_sum(pooled_grads * conv_outputs, axis=-1)
-    heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
+    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+
+    heatmap = tf.squeeze(heatmap)
+
+    heatmap = tf.maximum(heatmap,0)
+
+    heatmap /= (
+        tf.reduce_max(heatmap)+1e-8
+    )
+
     return heatmap.numpy()
 
-def overlay_heatmap_on_image(heatmap, pil_image, alpha=0.4):
+def overlay_heatmap_on_image(
+        heatmap,
+        pil_image,
+        alpha=0.40
+):
+
     import cv2
-    img = np.array(pil_image).astype("float32") / 255.0
-    h, w = img.shape[:2]
+    import matplotlib.cm as cm
 
-    heatmap_resized = cv2.resize(heatmap, (w, h))
-    heatmap_resized = np.uint8(255 * heatmap_resized)
+    img = np.asarray(
+        pil_image
+    ).astype(np.float32)/255.0
 
-    heatmap_color = cv2.applyColorMap(heatmap_resized, cv2.COLORMAP_JET)
-    heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
-    heatmap_color = heatmap_color.astype("float32") / 255.0
+    h,w = img.shape[:2]
 
-    overlay = alpha * heatmap_color + (1 - alpha) * img
-    overlay = np.clip(overlay, 0.0, 1.0)
+    heatmap = cv2.resize(
+        heatmap,
+        (w,h)
+    )
+
+    cmap = cm.get_cmap("jet")
+
+    heatmap_rgb = cmap(
+        heatmap
+    )[:,:,:3]
+
+    overlay = np.clip(
+        heatmap_rgb*alpha +
+        img*(1-alpha),
+        0,
+        1
+    )
+
     return overlay
 
 # ============================================================
