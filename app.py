@@ -638,19 +638,20 @@ buf2.seek(0)
 col1, col2 = st.columns(2)
 with col1:
     st.download_button(
-        "💾 Save Grad-CAM visualization",
-        data=buf1,
+        label="💾 Save Grad-CAM visualization",
+        data=buf1.getvalue(),
         file_name=f"gradcam_{pred_class}.png",
         mime="image/png",
-        on_click="ignore"
+        key="download_gradcam"
     )
+
 with col2:
     st.download_button(
-        "💾 Save probability chart",
-        data=buf2,
+        label="💾 Save probability chart",
+        data=buf2.getvalue(),
         file_name=f"probabilities_{pred_class}.png",
         mime="image/png",
-        on_click="ignore"
+        key="download_probs"
     )
 
 st.markdown("</div>", unsafe_allow_html=True)
